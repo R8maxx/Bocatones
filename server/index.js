@@ -27,10 +27,18 @@ db.exec(`
     filling    TEXT NOT NULL,
     bread      TEXT NOT NULL DEFAULT '',
     notes      TEXT NOT NULL DEFAULT '',
+    size       TEXT NOT NULL DEFAULT 'whole',
     created_at INTEGER NOT NULL
   );
   CREATE INDEX IF NOT EXISTS idx_orders_day ON orders(day);
 `)
+
+// migración para bases de datos creadas antes del campo "size"
+try {
+  db.exec("ALTER TABLE orders ADD COLUMN size TEXT NOT NULL DEFAULT 'whole'")
+} catch {
+  /* la columna ya existe */
+}
 
 // semilla de clásicos la primera vez
 const SEED = ['Lomo con queso', 'Tortilla', 'Calamares', 'Jamón', 'Bacon con queso', 'Vegetal', 'Pollo']
@@ -49,20 +57,21 @@ const q = {
   addClassic: db.prepare('INSERT OR IGNORE INTO classics (name, created_at) VALUES (?, ?)'),
   delClassic: db.prepare('DELETE FROM classics WHERE id = ?'),
   ordersByDay: db.prepare(
-    'SELECT id, person, filling, bread, notes, created_at AS createdAt FROM orders WHERE day = ? ORDER BY created_at DESC',
+    'SELECT id, person, filling, bread, notes, size, created_at AS createdAt FROM orders WHERE day = ? ORDER BY created_at DESC',
   ),
   addOrder: db.prepare(
-    'INSERT INTO orders (id, day, person, filling, bread, notes, created_at) VALUES (?, ?, ?, ?, ?, ?, ?)',
+    'INSERT INTO orders (id, day, person, filling, bread, notes, size, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)',
   ),
-  getOrder: db.prepare('SELECT id, person, filling, bread, notes, created_at AS createdAt FROM orders WHERE id = ?'),
+  getOrder: db.prepare('SELECT id, person, filling, bread, notes, size, created_at AS createdAt FROM orders WHERE id = ?'),
   dayOfOrder: db.prepare('SELECT day FROM orders WHERE id = ?'),
-  updateOrder: db.prepare('UPDATE orders SET person = ?, filling = ?, bread = ?, notes = ? WHERE id = ?'),
+  updateOrder: db.prepare('UPDATE orders SET person = ?, filling = ?, bread = ?, notes = ?, size = ? WHERE id = ?'),
   delOrder: db.prepare('DELETE FROM orders WHERE id = ?'),
   clearDay: db.prepare('DELETE FROM orders WHERE day = ?'),
 }
 
 const str = (v, max = 200) => (typeof v === 'string' ? v.trim().slice(0, max) : '')
 const dayOf = (v) => (/^\d{4}-\d{2}-\d{2}$/.test(v) ? v : null)
+const sizeOf = (v) => (v === 'half' ? 'half' : 'whole') // entero por defecto
 
 /* ----------------------------------------------------------------
    Tiempo real (WebSocket) — difunde cada cambio a todos los clientes
@@ -123,6 +132,7 @@ app.post('/api/orders', (req, res) => {
     filling,
     str(req.body?.bread, 40),
     str(req.body?.notes, 80),
+    sizeOf(req.body?.size),
     Date.now(),
   )
   pushOrders(day, str(req.body?.clientId, 64))
@@ -133,11 +143,13 @@ app.put('/api/orders/:id', (req, res) => {
   const existing = q.getOrder.get(req.params.id)
   if (!existing) return res.status(404).json({ error: 'no encontrado' })
   const filling = str(req.body?.filling, 60) || existing.filling
+  const size = req.body?.size === undefined ? existing.size : sizeOf(req.body.size)
   q.updateOrder.run(
     str(req.body?.person, 40),
     filling,
     str(req.body?.bread, 40),
     str(req.body?.notes, 80),
+    size,
     req.params.id,
   )
   const updated = q.getOrder.get(req.params.id)

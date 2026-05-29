@@ -9,6 +9,7 @@ const person = ref('')
 const filling = ref('')
 const bread = ref('')
 const notes = ref('')
+const size = ref('whole') // 'whole' = entero | 'half' = media
 
 const valid = computed(() => person.value.trim() && filling.value.trim())
 
@@ -34,11 +35,13 @@ function submit() {
     filling: filling.value,
     bread: bread.value,
     notes: notes.value,
+    size: size.value,
   })
   person.value = ''
   filling.value = ''
   bread.value = ''
   notes.value = ''
+  size.value = 'whole'
 }
 </script>
 
@@ -69,6 +72,26 @@ function submit() {
         <span class="lbl">// extras / notas</span>
         <input v-model="notes" type="text" placeholder="sin tomate, con alioli..." autocomplete="off" maxlength="80" />
       </label>
+    </div>
+
+    <div class="size-row">
+      <span class="size-lbl">// tamaño</span>
+      <div class="seg" role="group" aria-label="tamaño del bocata">
+        <button
+          type="button"
+          class="seg-btn"
+          :class="{ active: size === 'half' }"
+          :aria-pressed="size === 'half'"
+          @click="size = 'half'"
+        >½ media</button>
+        <button
+          type="button"
+          class="seg-btn"
+          :class="{ active: size === 'whole' }"
+          :aria-pressed="size === 'whole'"
+          @click="size = 'whole'"
+        >🥖 entero</button>
+      </div>
     </div>
 
     <div class="quick">
@@ -154,6 +177,43 @@ input:focus {
   border-color: var(--ink);
   box-shadow: inset 0 0 0 1px var(--ink);
   outline: none;
+}
+
+.size-row {
+  display: flex;
+  align-items: center;
+  gap: 0.7rem;
+  margin-top: 1.1rem;
+}
+.size-lbl {
+  font-size: 0.72rem;
+  color: var(--ink-faint);
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+}
+.seg {
+  display: inline-flex;
+  border: 1px solid var(--line-2);
+  border-radius: 999px;
+  padding: 2px;
+  gap: 2px;
+}
+.seg-btn {
+  font-family: var(--mono);
+  font-size: 0.8rem;
+  color: var(--ink-dim);
+  background: transparent;
+  border: none;
+  border-radius: 999px;
+  padding: 0.32rem 0.85rem;
+  cursor: pointer;
+  transition: color 0.15s, background 0.15s;
+}
+.seg-btn:hover { color: var(--ink); }
+.seg-btn.active {
+  color: var(--bg);
+  background: var(--ink);
+  font-weight: 700;
 }
 
 .quick {

@@ -45,6 +45,7 @@ function flashArrivals(newOnes) {
     id: top.id,
     person: top.person,
     filling: top.filling,
+    size: top.size,
     count: newOnes.length,
     at: Date.now(),
   }
@@ -67,6 +68,7 @@ function flashDepartures(removed) {
     id: 'rm_' + top.id,
     person: top.person,
     filling: top.filling,
+    size: top.size,
     count: removed.length,
     at: Date.now(),
   }
@@ -110,17 +112,36 @@ export function useOrders() {
 
   const count = computed(() => orders.value.length)
 
-  const byFilling = computed(() => {
-    const tally = new Map()
+  // agrupa los pedidos por relleno + pan + extras (conservando el texto original)
+  function groupOrders() {
+    const groups = new Map()
     for (const o of orders.value) {
-      const label = (o.filling || '???').trim()
-      const key = label.toLowerCase()
-      const prev = tally.get(key)
-      if (prev) prev.n += 1
-      else tally.set(key, { name: label, n: 1 })
+      const filling = (o.filling || '???').trim()
+      const bread = (o.bread || '').trim()
+      const notes = (o.notes || '').trim()
+      const key = [filling.toLowerCase(), bread.toLowerCase(), notes.toLowerCase()].join('|')
+      let g = groups.get(key)
+      if (!g) {
+        g = { filling, bread, notes, whole: 0, half: 0, n: 0 }
+        groups.set(key, g)
+      }
+      if (o.size === 'half') g.half += 1
+      else g.whole += 1
+      g.n += 1
     }
-    return [...tally.values()].sort((a, b) => b.n - a.n || a.name.localeCompare(b.name))
-  })
+    return [...groups.values()]
+  }
+
+  // recuento para el panel: de más a menos pedido
+  const byFilling = computed(() =>
+    groupOrders().sort(
+      (a, b) =>
+        b.n - a.n ||
+        a.filling.localeCompare(b.filling) ||
+        a.bread.localeCompare(b.bread) ||
+        a.notes.localeCompare(b.notes),
+    ),
+  )
 
   async function addOrder(fields) {
     const created = await api.addOrder(day.value, fields)
@@ -146,12 +167,37 @@ export function useOrders() {
   }
 
   function buildPlainList(dateLabel) {
+    // mismo agrupado que el panel, pero ordenado alfabéticamente para leerlo
+    const rows = groupOrders().sort(
+      (a, b) =>
+        a.filling.localeCompare(b.filling) ||
+        a.bread.localeCompare(b.bread) ||
+        a.notes.localeCompare(b.notes),
+    )
+
     const lines = []
     lines.push(`PEDIDO BOCATAS${dateLabel ? ' - ' + dateLabel : ''}`)
     lines.push('='.repeat(30))
-    for (const b of byFilling.value) lines.push(`${b.n}x ${b.name}`)
+    let totalWhole = 0
+    let totalHalf = 0
+    for (const g of rows) {
+      totalWhole += g.whole
+      totalHalf += g.half
+      const qty = []
+      if (g.whole) qty.push(`${g.whole} ${g.whole === 1 ? 'entero' : 'enteros'}`)
+      if (g.half) qty.push(`${g.half} ${g.half === 1 ? 'media' : 'medias'}`)
+      let line = `${g.filling}: ${qty.join(' + ')}`
+      const extra = []
+      if (g.bread) extra.push(`pan: ${g.bread}`)
+      if (g.notes) extra.push(g.notes)
+      if (extra.length) line += ` — ${extra.join(', ')}`
+      lines.push(line)
+    }
     lines.push('='.repeat(30))
-    lines.push(`Total: ${orders.value.length} ${orders.value.length === 1 ? 'bocata' : 'bocatas'}`)
+    const totals = []
+    if (totalWhole) totals.push(`${totalWhole} ${totalWhole === 1 ? 'entero' : 'enteros'}`)
+    if (totalHalf) totals.push(`${totalHalf} ${totalHalf === 1 ? 'media' : 'medias'}`)
+    lines.push(`Total: ${totals.join(' + ') || '0'}`)
     return lines.join('\n')
   }
 

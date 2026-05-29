@@ -8,7 +8,7 @@ defineProps({
 const emit = defineEmits(['remove', 'update'])
 
 const editingId = ref(null)
-const draft = reactive({ person: '', filling: '', bread: '', notes: '' })
+const draft = reactive({ person: '', filling: '', bread: '', notes: '', size: 'whole' })
 const firstInput = ref(null)
 
 function num(i) {
@@ -21,6 +21,7 @@ async function startEdit(o) {
   draft.filling = o.filling
   draft.bread = o.bread
   draft.notes = o.notes
+  draft.size = o.size || 'whole'
   await nextTick()
   firstInput.value?.[0]?.focus()
 }
@@ -54,6 +55,9 @@ function save(id) {
             <div class="line-1">
               <span class="person">{{ o.person || 'anónimo' }}</span>
               <span class="arrow">::</span>
+              <span class="size-chip" :class="o.size === 'half' ? 'half' : 'whole'">
+                {{ o.size === 'half' ? '½' : '1' }}
+              </span>
               <span class="filling">{{ o.filling }}</span>
             </div>
             <div class="line-2">
@@ -81,6 +85,10 @@ function save(id) {
               <input v-model="draft.filling" placeholder="relleno *" maxlength="60" />
               <input v-model="draft.bread" placeholder="pan" maxlength="40" />
               <input v-model="draft.notes" placeholder="extras / notas" maxlength="80" />
+            </div>
+            <div class="e-seg" role="group" aria-label="tamaño">
+              <button type="button" class="e-seg-btn" :class="{ active: draft.size === 'half' }" @click="draft.size = 'half'">½ media</button>
+              <button type="button" class="e-seg-btn" :class="{ active: draft.size === 'whole' }" @click="draft.size = 'whole'">🥖 entero</button>
             </div>
             <div class="e-actions">
               <button class="e-btn save" type="submit" :disabled="!draft.filling.trim()">guardar</button>
@@ -210,6 +218,44 @@ function save(id) {
 .person { font-weight: 700; color: var(--ink); }
 .arrow { color: var(--ink-faint); }
 .filling { color: var(--ink); word-break: break-word; }
+
+.size-chip {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 1.5rem;
+  height: 1.25rem;
+  padding: 0 0.35rem;
+  border-radius: 999px;
+  font-size: 0.72rem;
+  font-weight: 700;
+  line-height: 1;
+  border: 1px solid var(--line-2);
+}
+.size-chip.whole { color: var(--bg); background: var(--ink); border-color: var(--ink); }
+.size-chip.half { color: var(--ink); background: transparent; border-style: dashed; border-color: var(--ink-dim); }
+
+.e-seg {
+  display: inline-flex;
+  border: 1px solid var(--line-2);
+  border-radius: 999px;
+  padding: 2px;
+  gap: 2px;
+  align-self: flex-start;
+}
+.e-seg-btn {
+  font-family: var(--mono);
+  font-size: 0.78rem;
+  color: var(--ink-dim);
+  background: transparent;
+  border: none;
+  border-radius: 999px;
+  padding: 0.28rem 0.75rem;
+  cursor: pointer;
+  transition: color 0.15s, background 0.15s;
+}
+.e-seg-btn:hover { color: var(--ink); }
+.e-seg-btn.active { color: var(--bg); background: var(--ink); font-weight: 700; }
 
 .line-2 {
   display: flex;

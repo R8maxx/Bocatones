@@ -41,3 +41,4 @@ __screenshots__/
 # SQLite (datos locales del servidor)
 server/*.db
 server/*.db-*
+update.sh

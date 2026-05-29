@@ -68,6 +68,68 @@ Para cambiar el puerto: `PORT=8080 npm start`.
 
 ---
 
+## 🖥️ Despliegue en un servidor propio (PM2 + nginx)
+
+Para dejarlo corriendo en un servidor Linux de forma permanente, hay un script
+listo en **[`deploy/install.sh`](deploy/install.sh)** que automatiza todo:
+instala PM2, compila el frontend, arranca la app como servicio (con reinicio
+automático y logs) y configura nginx como proxy inverso (incluido el WebSocket).
+
+**Requisitos previos en el servidor:**
+
+- Node ≥ 22.12 y npm
+- nginx instalado
+- el proyecto clonado en la ruta que uses como `APP_DIR` (por defecto `/opt/Bocatones`)
+
+**Pasos:**
+
+```sh
+# 1. clona el proyecto en el servidor
+sudo git clone https://github.com/TU_USUARIO/bocatones.git /opt/Bocatones
+
+# 2. edita las variables del principio del script a tu gusto
+#    APP_DIR · APP_PORT · NGINX_PORT · SERVER_IP
+sudo nano /opt/Bocatones/deploy/install.sh
+
+# 3. ejecútalo como root
+cd /opt/Bocatones
+sudo bash deploy/install.sh
+```
+
+Al terminar tendrás la app en `http://SERVER_IP:NGINX_PORT`.
+
+| Variable     | Por defecto      | Qué es                                   |
+| ------------ | ---------------- | ---------------------------------------- |
+| `APP_DIR`    | `/opt/Bocatones` | Dónde está clonado el proyecto.          |
+| `APP_PORT`   | `3017`           | Puerto interno del servidor Node.        |
+| `NGINX_PORT` | `8080`           | Puerto público que sirve nginx.          |
+| `SERVER_IP`  | —                | IP o dominio del servidor.               |
+
+**Gestión del servicio** (PM2):
+
+```sh
+pm2 status            # estado
+pm2 logs bocatones    # ver logs en vivo
+pm2 restart bocatones # reiniciar
+```
+
+**Actualizar tras un cambio de código:**
+
+```sh
+cd /opt/Bocatones
+sudo git pull
+npm install
+npm run build
+pm2 restart bocatones
+```
+
+> El WebSocket necesita las cabeceras `Upgrade`/`Connection` en nginx; el script
+> ya las pone en el bloque `location /ws` (colocado **antes** de `location /`).
+> Los datos (SQLite) viven en `APP_DIR/server/bocatones.db` y persisten entre
+> reinicios y actualizaciones.
+
+---
+
 ## 🧰 Scripts
 
 | Comando            | Qué hace                                                        |

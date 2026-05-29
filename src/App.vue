@@ -54,6 +54,7 @@ watch(arrival, (a) => {
     phrase,
     emoji: isRemove ? '🗑️' : '🥪',
     verb: isRemove ? 'retira' : 'pide',
+    sizeTxt: a.size === 'half' ? '½ ' : '',
   }
   clearTimeout(toastTimer)
   toastTimer = setTimeout(() => (toast.value = null), 4200)
@@ -67,6 +68,22 @@ const todayLabel = computed(() =>
 )
 
 const max = computed(() => Math.max(1, ...byFilling.value.map((b) => b.n)))
+
+// recuento compacto por relleno: enteros + medias
+function sizeSummary(b) {
+  const parts = []
+  if (b.whole) parts.push(`${b.whole}`)
+  if (b.half) parts.push(`½×${b.half}`)
+  return parts.join(' + ')
+}
+
+// texto de extras (pan + notas) para el panel
+function extraText(b) {
+  const parts = []
+  if (b.bread) parts.push(`pan: ${b.bread}`)
+  if (b.notes) parts.push(b.notes)
+  return parts.join(' · ')
+}
 
 // ---- copiar lista para el bar ----
 const copied = ref(false)
@@ -138,12 +155,19 @@ function confirmClear() {
         <div v-if="byFilling.length" class="tally">
           <div class="tally-head">// recuento para el bar</div>
           <ul>
-            <li v-for="b in byFilling" :key="b.name" class="tally-row">
-              <span class="t-name">{{ b.name }}</span>
+            <li
+              v-for="b in byFilling"
+              :key="b.filling + '|' + b.bread + '|' + b.notes"
+              class="tally-row"
+            >
+              <span class="t-name">
+                <span class="t-filling">{{ b.filling }}</span>
+                <small v-if="b.bread || b.notes" class="t-extra">{{ extraText(b) }}</small>
+              </span>
               <span class="t-bar">
                 <span class="t-fill" :style="{ width: (b.n / max) * 100 + '%' }" />
               </span>
-              <span class="t-n">×{{ b.n }}</span>
+              <span class="t-n">{{ sizeSummary(b) }}</span>
             </li>
           </ul>
         </div>
@@ -194,7 +218,7 @@ function confirmClear() {
         <div class="bubble">
           <span class="bubble-tag">{{ toast.phrase }}</span>
           <span class="bubble-detail">
-            <b>{{ toast.person || 'alguien' }}</b> {{ toast.verb }} {{ toast.filling }}
+            <b>{{ toast.person || 'alguien' }}</b> {{ toast.verb }} {{ toast.sizeTxt }}{{ toast.filling }}
             <template v-if="toast.count > 1"> <i>(+{{ toast.count - 1 }} más)</i></template>
           </span>
           <span class="bubble-bar" aria-hidden="true" />
@@ -309,12 +333,25 @@ function confirmClear() {
 .tally ul { list-style: none; display: flex; flex-direction: column; gap: 0.55rem; }
 .tally-row {
   display: grid;
-  grid-template-columns: 1fr 64px auto;
+  grid-template-columns: 1fr 56px auto;
   align-items: center;
   gap: 0.7rem;
   font-size: 0.8rem;
 }
-.t-name { color: var(--ink); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.t-name { min-width: 0; display: flex; flex-direction: column; gap: 0.1rem; }
+.t-filling {
+  color: var(--ink);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.t-extra {
+  font-size: 0.68rem;
+  color: var(--ink-faint);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
 .t-bar {
   height: 6px;
   background: var(--line);
