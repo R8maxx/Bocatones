@@ -1,0 +1,28 @@
+{
+  "name": "bocatones",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "dev": "concurrently -n vite,api -c cyan,magenta \"vite\" \"npm:server\"",
+    "dev:web": "vite",
+    "server": "node --experimental-sqlite server/index.js",
+    "build": "vite build",
+    "start": "node --experimental-sqlite server/index.js",
+    "preview": "vite preview"
+  },
+  "dependencies": {
+    "express": "^4.21.2",
+    "vue": "^3.5.32",
+    "ws": "^8.21.0"
+  },
+  "devDependencies": {
+    "@vitejs/plugin-vue": "^6.0.6",
+    "concurrently": "^9.1.2",
+    "vite": "^8.0.8",
+    "vite-plugin-vue-devtools": "^8.1.1"
+  },
+  "engines": {
+    "node": "^20.19.0 || >=22.12.0"
+  }
+}

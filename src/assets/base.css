@@ -1,0 +1,116 @@
+/* ============================================================
+   BOCATONES // terminal theme
+   Black & white CRT hacker aesthetic. Color only lives in motion.
+   ============================================================ */
+
+:root {
+  /* mono palette */
+  --bg:        #050505;
+  --bg-soft:   #0c0c0c;
+  --panel:     #0f0f0f;
+  --line:      #1c1c1c;
+  --line-2:    #2a2a2a;
+  --ink:       #f2f2f2;
+  --ink-dim:   #8a8a8a;
+  --ink-faint: #4a4a4a;
+
+  /* glitch palette — sampled from the title gif. used ONLY for motion. */
+  --g1: #b5126b; /* magenta  */
+  --g2: #1b7a5a; /* teal     */
+  --g3: #d4b800; /* yellow   */
+  --g4: #1c2b6b; /* navy     */
+  --g5: #2f8f3e; /* green    */
+  --g6: #d4691e; /* orange   */
+  --g7: #2b8fd4; /* blue     */
+  --g8: #8a1d9e; /* purple   */
+
+  --mono: 'JetBrains Mono', ui-monospace, 'SF Mono', Menlo, monospace;
+  --crt:  'VT323', var(--mono);
+
+  --radius: 2px;
+  --maxw: 1080px;
+}
+
+*,
+*::before,
+*::after {
+  box-sizing: border-box;
+  margin: 0;
+  padding: 0;
+}
+
+html {
+  -webkit-text-size-adjust: 100%;
+  scrollbar-color: var(--line-2) var(--bg);
+}
+
+body {
+  min-height: 100vh;
+  background-color: var(--bg);
+  color: var(--ink);
+  font-family: var(--mono);
+  font-weight: 400;
+  line-height: 1.5;
+  font-synthesis: none;
+  text-rendering: optimizeLegibility;
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+  position: relative;
+  overflow-x: hidden;
+}
+
+/* faint grid background — like graph paper / terminal canvas */
+body::before {
+  content: '';
+  position: fixed;
+  inset: 0;
+  z-index: 0;
+  pointer-events: none;
+  background-image:
+    linear-gradient(var(--line) 1px, transparent 1px),
+    linear-gradient(90deg, var(--line) 1px, transparent 1px);
+  background-size: 44px 44px;
+  -webkit-mask-image: radial-gradient(ellipse 80% 70% at 50% 0%, #000 30%, transparent 80%);
+          mask-image: radial-gradient(ellipse 80% 70% at 50% 0%, #000 30%, transparent 80%);
+  opacity: 0.5;
+}
+
+/* CRT scanlines + flicker overlay */
+body::after {
+  content: '';
+  position: fixed;
+  inset: 0;
+  z-index: 9999;
+  pointer-events: none;
+  background: repeating-linear-gradient(
+    to bottom,
+    rgba(255, 255, 255, 0.025) 0px,
+    rgba(255, 255, 255, 0.025) 1px,
+    transparent 1px,
+    transparent 3px
+  );
+  mix-blend-mode: overlay;
+  animation: flicker 7s infinite steps(60);
+}
+
+@keyframes flicker {
+  0%, 96%, 100% { opacity: 0.55; }
+  97%           { opacity: 0.3; }
+  98%           { opacity: 0.7; }
+  99%           { opacity: 0.4; }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.001ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.001ms !important;
+  }
+}
+
+::selection {
+  background: var(--ink);
+  color: var(--bg);
+}
