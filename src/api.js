@@ -39,4 +39,7 @@ export const api = {
     req('DELETE', `/api/orders/${id}?clientId=${encodeURIComponent(clientId)}`),
   clearDay: (day) =>
     req('DELETE', `/api/orders?day=${encodeURIComponent(day)}&clientId=${encodeURIComponent(clientId)}`),
+
+  // sorteo: ¿quién recoge hoy? el servidor elige y lo difunde por WebSocket
+  draw: (day) => req('POST', '/api/draw', { day, clientId }),
 }

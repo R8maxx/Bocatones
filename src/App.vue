@@ -4,7 +4,10 @@ import GlitchTitle from './components/GlitchTitle.vue'
 import OrderForm from './components/OrderForm.vue'
 import OrderList from './components/OrderList.vue'
 import ThemePicker from './components/ThemePicker.vue'
+import SlotMachine from './components/SlotMachine.vue'
 import { useOrders } from './composables/useOrders.js'
+import { useDraw } from './composables/useDraw.js'
+import { personEmoji } from './composables/usePersonEmoji.js'
 import { rtStatus } from './realtime.js'
 
 const live = {
@@ -16,6 +19,30 @@ const liveState = computed(() => live[rtStatus.value] || live.offline)
 
 const { orders, count, byFilling, loading, error, freshIds, arrival, addOrder, updateOrder, removeOrder, clearAll, buildPlainList } =
   useOrders()
+
+// sorteo de quién recoge los bocatas
+const { open: slotOpen, round: slotRound, draw, winner, openMachine, confirmDraw, closeDraw } = useDraw()
+
+// al tirar de la palanca se pide el sorteo al servidor (y aparece en todas las pantallas)
+function onPull() {
+  confirmDraw().catch(() => closeDraw())
+}
+
+// personas distintas en la lista (no vacías) — candidatas al sorteo
+const people = computed(() => {
+  const seen = new Set()
+  const out = []
+  for (const o of orders.value) {
+    const n = (o.person || '').trim()
+    const k = n.toLowerCase()
+    if (n && !seen.has(k)) {
+      seen.add(k)
+      out.push(n)
+    }
+  }
+  return out
+})
+const canDraw = computed(() => people.value.length >= 2)
 
 // aviso emergente cuando alguien añade o quita un pedido
 const ADD_PHRASES = [
@@ -147,6 +174,15 @@ function confirmClear() {
       </section>
 
       <aside class="col-stats">
+        <button v-if="winner" class="pick-card" type="button" title="Volver a sortear" @click="openMachine">
+          <span class="pick-lbl">// hoy recoge</span>
+          <span class="pick-who">
+            <span class="pick-emoji">{{ personEmoji(winner.name) }}</span>
+            <span class="pick-name">{{ winner.name }}</span>
+          </span>
+          <span class="pick-hint">🎰 sortear de nuevo</span>
+        </button>
+
         <div class="stat-card">
           <div class="stat-num">{{ String(count).padStart(2, '0') }}</div>
           <div class="stat-lbl">{{ count === 1 ? 'bocata en cola' : 'bocatas en cola' }}</div>
@@ -181,6 +217,15 @@ function confirmClear() {
           <span class="ct">[{{ count }}]</span>
         </h2>
         <div v-if="count" class="head-actions">
+          <button
+            class="draw"
+            type="button"
+            :disabled="!canDraw"
+            :title="canDraw ? 'Sortear quién recoge los bocatas' : 'Hacen falta al menos 2 personas distintas'"
+            @click="openMachine"
+          >
+            🎰 ¿quién recoge?
+          </button>
           <button class="copy" type="button" :class="{ done: copied }" @click="copyList">
             <span aria-hidden="true">{{ copied ? '✓' : '⧉' }}</span>
             {{ copied ? 'copiado' : 'copiar lista' }}
@@ -225,6 +270,17 @@ function confirmClear() {
         </div>
       </div>
     </Transition>
+
+    <!-- tragaperras: ¿quién recoge los bocatas? -->
+    <SlotMachine
+      v-if="slotOpen"
+      :key="slotRound"
+      :draw="draw"
+      :people="people"
+      @close="closeDraw"
+      @pull="onPull"
+      @again="openMachine"
+    />
   </div>
 </template>
 
@@ -294,6 +350,44 @@ function confirmClear() {
 
 /* ---- stats ---- */
 .col-stats { display: flex; flex-direction: column; gap: 1rem; }
+
+/* tarjeta de quién recoge hoy (resultado del sorteo, persiste en el menú) */
+.pick-card {
+  display: flex;
+  flex-direction: column;
+  gap: 0.45rem;
+  width: 100%;
+  text-align: left;
+  cursor: pointer;
+  border: 1px solid var(--g5);
+  border-radius: var(--radius);
+  padding: 1rem 1.2rem;
+  background:
+    radial-gradient(120% 120% at 0% 0%, rgba(47, 143, 62, 0.14), transparent 60%),
+    var(--panel);
+  box-shadow: 0 0 22px -8px var(--g5);
+  transition: box-shadow 0.18s, transform 0.18s;
+}
+.pick-card:hover { box-shadow: 0 0 26px -4px var(--g5); transform: translateY(-1px); }
+.pick-lbl {
+  font-size: 0.72rem;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--ink-faint);
+}
+.pick-who { display: flex; align-items: center; gap: 0.6rem; min-width: 0; }
+.pick-emoji { font-size: 2rem; line-height: 1; flex-shrink: 0; }
+.pick-name {
+  font-family: var(--crt);
+  font-size: 1.9rem;
+  line-height: 1;
+  color: var(--ink);
+  text-shadow: 0 0 14px rgba(255, 255, 255, 0.22);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.pick-hint { font-size: 0.7rem; color: var(--ink-dim); letter-spacing: 0.04em; }
 .stat-card {
   border: 1px solid var(--line-2);
   border-radius: var(--radius);
@@ -386,7 +480,25 @@ function confirmClear() {
 }
 .hash { color: var(--ink-faint); }
 .ct { color: var(--ink-dim); font-weight: 400; }
-.head-actions { display: flex; gap: 0.5rem; }
+.head-actions { display: flex; gap: 0.5rem; flex-wrap: wrap; }
+.draw {
+  font-family: var(--mono);
+  font-size: 0.78rem;
+  font-weight: 700;
+  letter-spacing: 0.03em;
+  color: var(--ink);
+  background: transparent;
+  border: 1px solid var(--line-2);
+  border-radius: var(--radius);
+  padding: 0.4rem 0.85rem;
+  cursor: pointer;
+  transition: all 0.15s;
+}
+.draw:hover:not(:disabled) {
+  border-color: var(--g3);
+  box-shadow: 0 0 18px -6px var(--g3);
+}
+.draw:disabled { opacity: 0.4; cursor: not-allowed; }
 .copy {
   display: inline-flex;
   align-items: center;

@@ -1,5 +1,5 @@
 import { DatabaseSync } from 'node:sqlite'
-import { randomUUID } from 'node:crypto'
+import { randomUUID, randomInt } from 'node:crypto'
 import { fileURLToPath } from 'node:url'
 import { dirname, join } from 'node:path'
 import { existsSync } from 'node:fs'
@@ -72,6 +72,34 @@ const q = {
 const str = (v, max = 200) => (typeof v === 'string' ? v.trim().slice(0, max) : '')
 const dayOf = (v) => (/^\d{4}-\d{2}-\d{2}$/.test(v) ? v : null)
 const sizeOf = (v) => (v === 'half' ? 'half' : 'whole') // entero por defecto
+
+// personas únicas (no vacías, dedup ignorando mayúsculas) de los pedidos de un día
+function peopleOf(day) {
+  const seen = new Set()
+  const names = []
+  for (const o of q.ordersByDay.all(day)) {
+    const name = str(o.person, 40)
+    const key = name.toLowerCase()
+    if (name && !seen.has(key)) {
+      seen.add(key)
+      names.push(name)
+    }
+  }
+  return names
+}
+
+// baraja una copia (Fisher–Yates con randomInt) — mismo orden para todos
+function shuffled(arr) {
+  const a = arr.slice()
+  for (let i = a.length - 1; i > 0; i--) {
+    const j = randomInt(i + 1)
+    ;[a[i], a[j]] = [a[j], a[i]]
+  }
+  return a
+}
+
+// último sorteo por día: { day, people, winner, drawId, at } — en memoria
+const draws = new Map()
 
 /* ----------------------------------------------------------------
    Tiempo real (WebSocket) — difunde cada cambio a todos los clientes
@@ -173,6 +201,23 @@ app.delete('/api/orders', (req, res) => {
   res.json({ ok: true })
 })
 
+// --- sorteo: ¿quién recoge los bocatas hoy? ---
+app.post('/api/draw', (req, res) => {
+  const day = dayOf(req.body?.day)
+  if (!day) return res.status(400).json({ error: 'day inválido (YYYY-MM-DD)' })
+  const people = peopleOf(day)
+  if (people.length < 2) {
+    return res.status(400).json({ error: 'hacen falta al menos 2 personas para sortear' })
+  }
+  const reel = shuffled(people) // orden de los rodillos, idéntico para todos
+  const winner = reel[randomInt(reel.length)]
+  const payload = { type: 'draw', day, people: reel, winner, drawId: randomUUID(), at: Date.now() }
+  draws.set(day, payload)
+  // announce: false => abrir la tragaperras y animar; el iniciador entra por aquí también
+  broadcast({ ...payload, by: str(req.body?.clientId, 64) })
+  res.json(payload)
+})
+
 // --- servir el frontend compilado (producción) ---
 const dist = join(__dirname, '..', 'dist')
 if (existsSync(dist)) {
@@ -188,4 +233,9 @@ const server = app.listen(PORT, () => {
 wss = new WebSocketServer({ server, path: '/ws' })
 wss.on('connection', (socket) => {
   socket.send(JSON.stringify({ type: 'classics', classics: q.classics.all() }))
+  // reenvía los sorteos ya hechos con announce:true => el cliente muestra el
+  // ganador en el menú sin volver a abrir/animar la tragaperras
+  for (const payload of draws.values()) {
+    socket.send(JSON.stringify({ ...payload, announce: true }))
+  }
 })
