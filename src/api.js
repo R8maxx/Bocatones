@@ -25,21 +25,45 @@ export function todayKey() {
   return `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())}`
 }
 
+const qs = (params) => {
+  const s = new URLSearchParams()
+  for (const [k, v] of Object.entries(params)) if (v !== undefined && v !== null && v !== '') s.set(k, v)
+  const out = s.toString()
+  return out ? `?${out}` : ''
+}
+
 export const api = {
-  // clásicos
+  // clásicos (catálogo de rellenos + precios)
   listClassics: () => req('GET', '/api/classics'),
   addClassic: (name) => req('POST', '/api/classics', { name }),
+  updateClassic: (id, fields) => req('PUT', `/api/classics/${id}`, fields),
   removeClassic: (id) => req('DELETE', `/api/classics/${id}`),
 
+  // personas ya conocidas, para autocompletar el nombre
+  listPeople: () => req('GET', '/api/people'),
+
   // pedidos del día
-  listOrders: (day) => req('GET', `/api/orders?day=${encodeURIComponent(day)}`),
+  listOrders: (day) => req('GET', `/api/orders${qs({ day })}`),
   addOrder: (day, fields) => req('POST', '/api/orders', { day, clientId, ...fields }),
-  updateOrder: (id, fields) => req('PUT', `/api/orders/${id}`, fields),
-  removeOrder: (id) =>
-    req('DELETE', `/api/orders/${id}?clientId=${encodeURIComponent(clientId)}`),
-  clearDay: (day) =>
-    req('DELETE', `/api/orders?day=${encodeURIComponent(day)}&clientId=${encodeURIComponent(clientId)}`),
+  updateOrder: (id, fields) => req('PUT', `/api/orders/${id}`, { clientId, ...fields }),
+  removeOrder: (id) => req('DELETE', `/api/orders/${id}${qs({ clientId })}`),
+  clearDay: (day) => req('DELETE', `/api/orders${qs({ day, clientId })}`),
+
+  // pagos: saldar todo lo que debe una persona (o solo un día)
+  settle: (person, day) => req('POST', '/api/payments/settle', { person, day, clientId }),
+
+  // ausencias: quién no puede ir hoy (queda fuera del sorteo)
+  listUnavailable: (day) => req('GET', `/api/unavailable${qs({ day })}`),
+  setUnavailable: (day, person, unavailable) =>
+    req('PUT', '/api/unavailable', { day, person, unavailable, clientId }),
 
   // sorteo: ¿quién recoge hoy? el servidor elige y lo difunde por WebSocket
   draw: (day) => req('POST', '/api/draw', { day, clientId }),
+  drawOdds: (day) => req('GET', `/api/draw/odds${qs({ day })}`),
+  setDrawWinner: (day, winner) => req('PUT', `/api/draws/${day}`, { winner, clientId }),
+
+  // histórico
+  historyDays: (params = {}) => req('GET', `/api/history/days${qs(params)}`),
+  historyDay: (day) => req('GET', `/api/history/day${qs({ day })}`),
+  historyPeople: (params = {}) => req('GET', `/api/history/people${qs(params)}`),
 }

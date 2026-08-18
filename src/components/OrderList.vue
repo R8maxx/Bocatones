@@ -1,14 +1,16 @@
 <script setup>
 import { ref, reactive, nextTick } from 'vue'
+import { fmt, toInput, parse } from '../money.js'
 
 defineProps({
   orders: { type: Array, required: true },
   freshIds: { type: Object, default: () => new Set() },
+  readonly: { type: Boolean, default: false }, // en el histórico solo se toca el pago
 })
-const emit = defineEmits(['remove', 'update'])
+const emit = defineEmits(['remove', 'update', 'paid'])
 
 const editingId = ref(null)
-const draft = reactive({ person: '', filling: '', bread: '', notes: '', size: 'whole' })
+const draft = reactive({ person: '', filling: '', bread: '', notes: '', size: 'whole', price: '' })
 const firstInput = ref(null)
 
 function num(i) {
@@ -22,6 +24,7 @@ async function startEdit(o) {
   draft.bread = o.bread
   draft.notes = o.notes
   draft.size = o.size || 'whole'
+  draft.price = toInput(o.price)
   await nextTick()
   firstInput.value?.[0]?.focus()
 }
@@ -32,7 +35,8 @@ function cancel() {
 
 function save(id) {
   if (!draft.filling.trim()) return // el relleno es obligatorio
-  emit('update', id, { ...draft })
+  const { price, ...rest } = draft
+  emit('update', id, { ...rest, price: parse(price) ?? 0 })
   editingId.value = null
 }
 </script>
@@ -67,7 +71,22 @@ function save(id) {
             </div>
           </div>
 
-          <div class="actions">
+          <div class="pay">
+            <span class="amount">{{ fmt(o.price) }}</span>
+            <button
+              class="paid-btn"
+              type="button"
+              :class="o.paid ? 'is-paid' : 'is-due'"
+              :aria-pressed="!!o.paid"
+              :title="o.paid ? 'pagado — pulsa para marcar como pendiente' : 'pendiente — pulsa para marcar como pagado'"
+              @click="emit('paid', o.id, !o.paid)"
+            >
+              <span aria-hidden="true">{{ o.paid ? '✓' : '€' }}</span>
+              {{ o.paid ? 'pagado' : 'debe' }}
+            </button>
+          </div>
+
+          <div v-if="!readonly" class="actions">
             <button class="act edit" type="button" :aria-label="`editar pedido de ${o.person}`" @click="startEdit(o)">
               <span aria-hidden="true">✎</span>
             </button>
@@ -86,9 +105,15 @@ function save(id) {
               <input v-model="draft.bread" placeholder="pan" maxlength="40" />
               <input v-model="draft.notes" placeholder="extras / notas" maxlength="80" />
             </div>
-            <div class="e-seg" role="group" aria-label="tamaño">
-              <button type="button" class="e-seg-btn" :class="{ active: draft.size === 'half' }" @click="draft.size = 'half'">½ media</button>
-              <button type="button" class="e-seg-btn" :class="{ active: draft.size === 'whole' }" @click="draft.size = 'whole'">🥖 entero</button>
+            <div class="e-row">
+              <div class="e-seg" role="group" aria-label="tamaño">
+                <button type="button" class="e-seg-btn" :class="{ active: draft.size === 'half' }" @click="draft.size = 'half'">½ media</button>
+                <button type="button" class="e-seg-btn" :class="{ active: draft.size === 'whole' }" @click="draft.size = 'whole'">🥖 entero</button>
+              </div>
+              <span class="e-price">
+                <input v-model="draft.price" type="text" inputmode="decimal" maxlength="7" placeholder="0,00" aria-label="precio en euros" />
+                <span class="e-cur" aria-hidden="true">€</span>
+              </span>
             </div>
             <div class="e-actions">
               <button class="e-btn save" type="submit" :disabled="!draft.filling.trim()">guardar</button>
@@ -112,7 +137,7 @@ function save(id) {
 .row {
   position: relative;
   display: grid;
-  grid-template-columns: auto 1fr auto;
+  grid-template-columns: auto 1fr auto auto;
   align-items: center;
   gap: 0.9rem;
   background: var(--bg-soft);
@@ -235,6 +260,24 @@ function save(id) {
 .size-chip.whole { color: var(--bg); background: var(--ink); border-color: var(--ink); }
 .size-chip.half { color: var(--ink); background: transparent; border-style: dashed; border-color: var(--ink-dim); }
 
+/* fila de tamaño + precio en el modo edición */
+.e-row { display: flex; align-items: center; flex-wrap: wrap; gap: 0.6rem 0.9rem; }
+.e-price { position: relative; display: inline-flex; align-items: center; }
+.e-price input {
+  width: 6rem;
+  font-family: var(--mono);
+  font-size: 0.86rem;
+  text-align: right;
+  font-variant-numeric: tabular-nums;
+  color: var(--ink);
+  background: var(--bg);
+  border: 1px solid var(--line-2);
+  border-radius: 999px;
+  padding: 0.26rem 1.5rem 0.26rem 0.7rem;
+}
+.e-price input:focus { border-color: var(--ink); outline: none; }
+.e-cur { position: absolute; right: 0.65rem; font-size: 0.75rem; color: var(--ink-faint); pointer-events: none; }
+
 .e-seg {
   display: inline-flex;
   border: 1px solid var(--line-2);
@@ -267,6 +310,42 @@ function save(id) {
 .tag { color: var(--ink-dim); }
 .tag.note { color: var(--ink); }
 .tag.empty { color: var(--ink-faint); font-style: italic; }
+
+/* ---- dinero: importe + estado de pago ---- */
+.pay {
+  display: flex;
+  align-items: center;
+  gap: 0.55rem;
+}
+.amount {
+  font-variant-numeric: tabular-nums;
+  font-size: 0.86rem;
+  color: var(--ink-dim);
+  white-space: nowrap;
+}
+.paid-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.4ch;
+  font-family: var(--mono);
+  font-size: 0.7rem;
+  letter-spacing: 0.04em;
+  background: transparent;
+  border: 1px solid var(--line-2);
+  border-radius: 999px;
+  padding: 0.22rem 0.6rem;
+  cursor: pointer;
+  transition: all 0.15s;
+}
+.paid-btn.is-due { color: var(--g6); border-color: color-mix(in srgb, var(--g6) 45%, var(--line-2)); }
+.paid-btn.is-due:hover { border-color: var(--g6); box-shadow: 0 0 14px -6px var(--g6); }
+.paid-btn.is-paid { color: var(--g5); border-color: color-mix(in srgb, var(--g5) 45%, var(--line-2)); }
+.paid-btn.is-paid:hover { border-color: var(--g5); box-shadow: 0 0 14px -6px var(--g5); }
+
+@media (max-width: 560px) {
+  .row { grid-template-columns: auto 1fr auto; }
+  .pay { grid-column: 2 / -1; margin-top: 0.35rem; }
+}
 
 .actions { display: flex; gap: 0.35rem; }
 .act {

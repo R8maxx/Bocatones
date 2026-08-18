@@ -15,10 +15,11 @@ import { personEmoji } from '../composables/usePersonEmoji.js'
  */
 
 const props = defineProps({
-  draw: { type: Object, default: null }, // { people, winner, drawId, mine } | null
+  draw: { type: Object, default: null }, // { people, winner, odds, drawId, mine } | null
   people: { type: Array, default: () => [] }, // gente local para los rodillos en espera
+  odds: { type: Array, default: () => [] }, // [{ name, gone, chance }] papeletas de hoy
 })
-const emit = defineEmits(['close', 'pull', 'again'])
+const emit = defineEmits(['close', 'pull', 'again', 'toggle'])
 
 const REEL_CELL = 64 // alto de cada celda (px) — debe coincidir con el CSS
 const reducedMotion =
@@ -33,6 +34,24 @@ const reels = ref([])
 let finishTimer = null
 
 const winnerEmoji = computed(() => (props.draw ? personEmoji(props.draw.winner) : '🥪'))
+
+// papeletas: las del sorteo si ya está resuelto, o las de hoy mientras se espera.
+// De mayor a menor para que se lea como un ranking.
+const oddsList = computed(() => {
+  const list = props.draw?.odds?.length ? props.draw.odds : props.odds
+  // disponibles primero; los que no pueden ir, al final
+  return [...(list || [])].sort(
+    (a, b) => (a.available === false) - (b.available === false) || b.chance - a.chance,
+  )
+})
+
+// quién entra realmente en el bombo (los ausentes no salen en los rodillos)
+const inPlay = computed(() => {
+  const list = oddsList.value.filter((o) => o.available !== false).map((o) => o.name)
+  return list.length ? list : props.people
+})
+const awayCount = computed(() => oddsList.value.filter((o) => o.available === false).length)
+const canPull = computed(() => inPlay.value.length >= 2)
 
 // construye la tira de cada rodillo: gente repetida + ganador centrado al final
 function buildReels(people, winnerName) {
@@ -73,7 +92,7 @@ function startSpin(d) {
 
 // tirar de la palanca → pide el sorteo; el giro arranca cuando llega `draw`
 function pull() {
-  if (phase.value !== 'ready' || armed.value) return
+  if (phase.value !== 'ready' || armed.value || !canPull.value) return
   armed.value = true
   emit('pull')
   if (props.draw) startSpin(props.draw) // por si ya estuviera disponible
@@ -97,10 +116,16 @@ onMounted(() => {
     // resto de pantallas (o resultado ya disponible): gira directamente
     startSpin(props.draw)
   } else {
-    // iniciador: muestra a la gente local y espera a la palanca
-    reels.value = buildReels(props.people, props.people[0] || '?')
+    // iniciador: muestra a quien puede ir y espera a la palanca
+    reels.value = buildReels(inPlay.value, inPlay.value[0] || '?')
     phase.value = 'ready'
   }
+})
+
+// si se marca a alguien como ausente mientras la máquina espera, los rodillos
+// se rehacen para que no aparezca en ellos
+watch(inPlay, (list) => {
+  if (phase.value === 'ready' && !armed.value) reels.value = buildReels(list, list[0] || '?')
 })
 
 onBeforeUnmount(() => {
@@ -180,7 +205,39 @@ onBeforeUnmount(() => {
                   </div>
                 </div>
                 <p v-else-if="armed || phase === 'spinning'" key="spin" class="tray-hint">▘▙ girando… ▟▝</p>
-                <p v-else key="ready" class="tray-hint blink-hint">↓ tira de la palanca ↓</p>
+                <div v-else key="ready" class="ready">
+                  <p v-if="canPull" class="tray-hint blink-hint">↓ tira de la palanca ↓</p>
+                  <p v-else class="tray-hint warn">
+                    hacen falta 2 que puedan ir
+                  </p>
+                  <!-- papeletas a la vista: quien menos ha ido, más probabilidad.
+                       Cada fila se puede pulsar para marcar que hoy no puede ir. -->
+                  <ul v-if="oddsList.length" class="odds" aria-label="probabilidades del sorteo">
+                    <li v-for="o in oddsList" :key="o.name">
+                      <button
+                        type="button"
+                        class="odd"
+                        :class="{ away: o.available === false }"
+                        :aria-pressed="o.available !== false"
+                        :title="o.available === false ? `${o.name} no puede ir hoy — pulsa para volver a incluirle` : `${o.name} entra en el sorteo — pulsa si hoy no puede ir`"
+                        @click="emit('toggle', o.name)"
+                      >
+                        <span class="odd-name">{{ personEmoji(o.name) }} {{ o.name }}</span>
+                        <span v-if="o.available === false" class="odd-away">no puede</span>
+                        <template v-else>
+                          <span class="odd-bar" aria-hidden="true">
+                            <span class="odd-fill" :style="{ width: o.chance * 100 + '%' }" />
+                          </span>
+                          <span class="odd-pct">{{ Math.round(o.chance * 100) }}%</span>
+                        </template>
+                        <span class="odd-gone">{{ o.gone }}× ido</span>
+                      </button>
+                    </li>
+                  </ul>
+                  <p v-if="oddsList.length" class="odds-hint">
+                    pulsa a quien hoy no pueda ir<template v-if="awayCount"> · {{ awayCount }} fuera</template>
+                  </p>
+                </div>
               </Transition>
             </div>
           </div>
@@ -566,6 +623,74 @@ onBeforeUnmount(() => {
   align-items: center;
   justify-content: center;
 }
+/* ---- papeletas visibles antes de tirar ---- */
+.ready { display: flex; flex-direction: column; gap: 0.55rem; width: 100%; }
+.odds {
+  list-style: none;
+  display: flex;
+  flex-direction: column;
+  gap: 0.28rem;
+  width: 100%;
+  max-height: 8.5rem;
+  overflow-y: auto;
+  padding: 0.5rem 0.6rem;
+  border: 1px dashed var(--line-2);
+  border-radius: var(--radius);
+}
+.odds li { display: block; }
+.odd {
+  width: 100%;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 52px 2.4rem 3.6rem;
+  align-items: center;
+  gap: 0.45rem;
+  font-size: 0.7rem;
+  color: var(--ink-dim);
+  text-align: left;
+  background: transparent;
+  border: 1px solid transparent;
+  border-radius: 999px;
+  padding: 0.14rem 0.4rem;
+  cursor: pointer;
+  transition: background 0.15s, border-color 0.15s, opacity 0.15s;
+}
+.odd:hover { border-color: var(--line-2); background: var(--bg-soft); }
+
+/* quien hoy no puede ir: tachado, sin barra y sin porcentaje */
+.odd.away { opacity: 0.5; }
+.odd.away .odd-name { text-decoration: line-through; color: var(--ink-dim); }
+.odd-away {
+  grid-column: 2 / 4;
+  text-align: center;
+  font-size: 0.62rem;
+  letter-spacing: 0.04em;
+  color: var(--g6);
+  white-space: nowrap;
+}
+.odds-hint {
+  font-size: 0.62rem;
+  color: var(--ink-faint);
+  letter-spacing: 0.04em;
+}
+.tray-hint.warn { color: var(--g6); }
+.odd-name {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: var(--ink);
+}
+.odd-bar { height: 5px; background: var(--line); border-radius: 999px; overflow: hidden; }
+.odd-fill { display: block; height: 100%; background: var(--ink); border-radius: 999px; }
+.odd-pct { text-align: right; font-variant-numeric: tabular-nums; color: var(--ink); }
+.odd-gone { text-align: right; font-size: 0.64rem; color: var(--ink-faint); white-space: nowrap; }
+
+@media (max-width: 520px) {
+  .odd { grid-template-columns: minmax(0, 1fr) 2.4rem; }
+  .odd-bar, .odd-gone { display: none; }
+  .odd-away { grid-column: 2; }
+}
+
 .tray-hint {
   font-family: var(--crt);
   font-size: 1.2rem;

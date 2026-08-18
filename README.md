@@ -21,8 +21,26 @@ con un título *glitch* que imita la terminal.
 - 🔔 **Avisos divertidos** — cuando otra persona pide, cae un bocata con su
   frase (*¡marchando!*); cuando alguien se arrepiente, salta un 🗑️ en rojo
   tenue (*alguien se ha arrepentido…*).
-- 🗂️ **Catálogo de clásicos** — registra los bocadillos de siempre para pedirlos
-  con un clic. Cualquiera puede añadir o borrar.
+- 🗂️ **Catálogo de clásicos** — registra los bocadillos de siempre, con su
+  precio, para pedirlos con un clic. Cualquiera puede añadir o borrar.
+- 💰 **Precios y quién ha pagado** — el precio se autorellena desde el catálogo y
+  se puede ajustar en cada pedido. Un check por pedido marca quién ha pagado, y
+  el panel resume la **deuda acumulada** de cada uno sumando todos los días
+  pendientes (con un botón para saldar la cuenta de golpe).
+- 🎰 **Sorteo de quién recoge** — una tragaperras decide quién baja al bar, y gira
+  a la vez en todas las pantallas con el mismo resultado.
+- ⚖️ **Y es un sorteo justo** — no es 100% aleatorio: **quien menos ha ido tiene
+  más papeletas**. Con 0, 1 y 5 recogidas a la espalda las probabilidades quedan
+  en ~78% / 19% / 2%. Nadie llega nunca al 0%, así que sigue habiendo emoción, y
+  los porcentajes están **a la vista antes de tirar de la palanca** para que no
+  haya discusiones.
+- 🚫 **Quien hoy no puede ir** — si alguien tiene reunión o está fuera, se le
+  marca en la propia tragaperras con un clic: queda tachado, sin papeletas y no
+  aparece ni en los rodillos. Es **por día**, se ve al instante en todas las
+  pantallas, y no le cuenta como haber ido (así que no pierde su turno).
+- 📜 **Modo histórico** — consulta los días anteriores: qué se pidió, cuánto
+  costó, quién pagó y **quién lo recogió** (corregible a mano si al final fue
+  otro). Incluye resumen por persona y el ranking de a quién le toca.
 - 📋 **Copiar para el bar** — un botón copia el recuento agrupado, sin nombres:
   `2x Lomo con queso`, listo para WhatsApp.
 - ✏️ **Editar sobre la marcha** — corrige cualquier pedido en línea si alguien
@@ -30,7 +48,8 @@ con un título *glitch* que imita la terminal.
 - 🎨 **Tema a tu gusto** — elige el color de fondo (8 presets o color libre); se
   guarda en tu navegador y no afecta a los demás. La paleta se recalcula sola
   para seguir siendo legible.
-- 📅 **Fecha de hoy** — la lista se organiza por día; cada jornada empieza limpia.
+- 📅 **Fecha de hoy** — la lista se organiza por día; cada jornada empieza limpia
+  y la anterior se queda guardada en el histórico.
 
 ---
 
@@ -159,28 +178,45 @@ bocatones/
 ├─ server/
 │  └─ index.js              # API REST + WebSocket + SQLite
 └─ src/
-   ├─ App.vue               # layout, avisos (toasts), estado de conexión
+   ├─ App.vue               # layout, avisos (toasts), estado de conexión, vista hoy/histórico
    ├─ api.js                # cliente HTTP + clientId + día local
+   ├─ money.js              # euros ⇄ céntimos (formato y parseo)
    ├─ realtime.js           # WebSocket único con reconexión automática
    ├─ assets/               # tema CRT (base.css) y layout (main.css)
    ├─ components/
    │  ├─ GlitchTitle.vue    # título "BOCATONES" con efecto glitch
-   │  ├─ OrderForm.vue      # alta de pedido + gestión de clásicos
-   │  ├─ OrderList.vue      # cola, edición en línea, destello de llegada
+   │  ├─ OrderForm.vue      # alta de pedido + precio + gestión de clásicos
+   │  ├─ OrderList.vue      # cola, edición en línea, importe y check de pagado
+   │  ├─ SlotMachine.vue    # tragaperras del sorteo, con las papeletas a la vista
+   │  ├─ HistoryPanel.vue   # modo histórico: días, por persona, a quién le toca
+   │  ├─ PriceList.vue      # editor del catálogo de precios
    │  └─ ThemePicker.vue    # selector de color de fondo
    └─ composables/
-      ├─ useOrders.js       # lista del día (REST + WebSocket)
-      ├─ useClassics.js     # catálogo de clásicos
+      ├─ useOrders.js       # lista del día + dinero + deuda (REST + WebSocket)
+      ├─ useDraw.js         # sorteo compartido y papeletas
+      ├─ useHistory.js      # modo histórico (carga perezosa)
+      ├─ useClassics.js     # catálogo de clásicos y sus precios
+      ├─ usePersonEmoji.js  # emoji determinista por nombre
       └─ useTheme.js        # tema/color persistente por navegador
 ```
 
 ### Datos
 
 - Todo se guarda en **`server/bocatones.db`** (SQLite). Está en `.gitignore`.
-- Dos tablas: `classics` (catálogo) y `orders` (pedidos, con columna `day`).
+- Tres tablas:
+  - `classics` — catálogo de rellenos con su precio (`price_whole`, `price_half`).
+  - `orders` — pedidos, con `day`, `size` (`whole`/`half`), `price` y `paid`.
+  - `draws` — quién recogió cada día (`day` es la clave: resortear reemplaza).
+  - `unavailable` — quién no podía ir cada día (clave `day` + `person`).
+- **El dinero va siempre en céntimos** (enteros), nunca en decimales.
+- El precio del pedido es una **foto del momento**: cambiar el catálogo no altera
+  lo que ya está pedido, así que el histórico no se mueve.
+- Las migraciones son `ALTER TABLE` idempotentes al arrancar: se puede desplegar
+  sobre una base de datos antigua sin tocar nada (los pedidos viejos se quedan a
+  precio 0 y sin pagar).
 - La primera vez se siembra el catálogo con unos clásicos de ejemplo.
-- El **tema** es lo único que vive en el navegador (`localStorage`), porque es
-  personal de cada uno.
+- En el navegador (`localStorage`) solo viven dos cosas personales: el **tema**
+  (`bocatones:bg`) y **tu nombre** (`bocatones:me`), para no reescribirlo cada vez.
 
 ### Tiempo real, sin sustos
 
@@ -196,20 +232,42 @@ bocatones/
 
 Base: `/api` · El día viaja siempre como `YYYY-MM-DD`.
 
+Los importes son **céntimos** (`350` = 3,50 €).
+
 | Método   | Ruta                          | Descripción                              |
 | -------- | ----------------------------- | ---------------------------------------- |
-| `GET`    | `/api/classics`               | Lista de clásicos.                       |
+| `GET`    | `/api/classics`               | Catálogo con `priceWhole` / `priceHalf`. |
 | `POST`   | `/api/classics`               | Añade un clásico `{ name }`.             |
+| `PUT`    | `/api/classics/:id`           | Edita `{ name?, priceWhole?, priceHalf? }`. |
 | `DELETE` | `/api/classics/:id`           | Borra un clásico.                        |
+| `GET`    | `/api/people`                 | Nombres ya usados (para autocompletar).  |
 | `GET`    | `/api/orders?day=YYYY-MM-DD`  | Pedidos de ese día.                      |
-| `POST`   | `/api/orders`                 | Crea pedido `{ day, person, filling, bread, notes, clientId }`. |
-| `PUT`    | `/api/orders/:id`             | Edita un pedido.                         |
+| `POST`   | `/api/orders`                 | Crea pedido `{ day, person, filling, bread, notes, size, price?, clientId }`. Sin `price` se aplica el del catálogo. |
+| `PUT`    | `/api/orders/:id`             | Edición **parcial**: solo se toca lo que llega (incluye `price` y `paid`). |
 | `DELETE` | `/api/orders/:id`             | Borra un pedido.                         |
 | `DELETE` | `/api/orders?day=YYYY-MM-DD`  | Vacía el día entero.                     |
+| `POST`   | `/api/payments/settle`        | Salda lo que debe alguien: `{ person, day? }`. |
+| `GET`    | `/api/unavailable?day=`       | Quién no puede ir ese día.                |
+| `PUT`    | `/api/unavailable`            | Marca o desmarca `{ day, person, unavailable }`. |
+| `GET`    | `/api/draw/odds?day=`         | Papeletas y probabilidad de cada candidato (con `available`). |
+| `POST`   | `/api/draw`                   | Sortea `{ day, clientId }` y lo guarda.  |
+| `PUT`    | `/api/draws/:day`             | Corrige a mano quién recogió `{ winner }`. |
+| `GET`    | `/api/history/days`           | Un resumen por día (`from`, `to`, `limit`). |
+| `GET`    | `/api/history/day?day=`       | Detalle: pedidos + quién recogió + totales. |
+| `GET`    | `/api/history/people`         | Por persona: gasto, deuda y veces que ha ido. |
 
-Cada cambio en pedidos se difunde por WebSocket (`/ws`) a todos los clientes
-conectados como `{ type: 'orders', day, orders, by }`, y los cambios en el
-catálogo como `{ type: 'classics', classics }`.
+Mensajes que salen por el WebSocket (`/ws`):
+
+| Mensaje | Cuándo |
+| ------- | ------ |
+| `{ type: 'orders', day, orders, by }`                | cualquier cambio en los pedidos de un día |
+| `{ type: 'classics', classics }`                     | cambios en el catálogo o al conectar |
+| `{ type: 'draw', day, people, odds, winner, … }`     | al sortear; con `announce: true` si es solo para el banner |
+| `{ type: 'paid', person, days, by }`                 | alguien ha saldado una cuenta |
+| `{ type: 'unavailable', day, people }`               | ha cambiado quién puede ir hoy |
+
+Al conectar, el servidor reenvía el catálogo y los **últimos 7 sorteos** con
+`announce: true` (el cliente se queda con el de su día).
 
 ---
 

@@ -1,17 +1,48 @@
 <script setup>
-import { ref, computed } from 'vue'
+import { computed, onMounted, ref, watch } from 'vue'
 import { useClassics } from '../composables/useClassics.js'
+import { api } from '../api.js'
+import { toInput, parse } from '../money.js'
 
 const emit = defineEmits(['add'])
-const { classics, addClassic, removeClassic } = useClassics()
+const { classics, addClassic, removeClassic, priceFor } = useClassics()
+
+const ME_KEY = 'bocatones:me' // tu nombre, recordado para no reescribirlo cada vez
 
 const person = ref('')
 const filling = ref('')
 const bread = ref('')
 const notes = ref('')
 const size = ref('whole') // 'whole' = entero | 'half' = media
+const price = ref('') // en euros y como texto ("3,50"); vacío = usa el catálogo
+let priceTouched = false // si lo escribes a mano, dejamos de sobreescribirlo
+
+// nombres ya usados: evita que la deuda se parta entre "Maria" y "maría"
+const knownPeople = ref([])
+
+onMounted(async () => {
+  try {
+    person.value = localStorage.getItem(ME_KEY) || ''
+  } catch {
+    /* modo privado: se escribe a mano y listo */
+  }
+  try {
+    knownPeople.value = await api.listPeople()
+  } catch {
+    /* el autocompletado es solo una ayuda */
+  }
+})
 
 const valid = computed(() => person.value.trim() && filling.value.trim())
+
+// precio de catálogo para el relleno y el tamaño de ahora mismo (céntimos o null)
+const suggested = computed(() => priceFor(filling.value, size.value))
+const suggestedTxt = computed(() => toInput(suggested.value))
+
+// mientras no lo toques a mano, el precio sigue al catálogo
+watch(suggested, (cents) => {
+  if (!priceTouched) price.value = toInput(cents)
+})
 
 // ¿el relleno escrito ya existe como clásico?
 const isKnown = computed(() =>
@@ -30,18 +61,28 @@ function saveAsClassic() {
 
 function submit() {
   if (!valid.value) return
+  const cents = parse(price.value)
   emit('add', {
     person: person.value,
     filling: filling.value,
     bread: bread.value,
     notes: notes.value,
     size: size.value,
+    // si lo dejas en blanco no mandamos precio: el servidor aplica el del catálogo
+    ...(cents === null ? {} : { price: cents }),
   })
-  person.value = ''
+  try {
+    localStorage.setItem(ME_KEY, person.value.trim())
+  } catch {
+    /* modo privado */
+  }
+  // el nombre se queda puesto a propósito: normalmente pides tú otra vez
   filling.value = ''
   bread.value = ''
   notes.value = ''
   size.value = 'whole'
+  price.value = ''
+  priceTouched = false
 }
 </script>
 
@@ -55,7 +96,17 @@ function submit() {
     <div class="grid">
       <label class="field">
         <span class="lbl">// quién pide</span>
-        <input v-model="person" type="text" placeholder="tu nombre" autocomplete="off" maxlength="40" />
+        <input
+          v-model="person"
+          type="text"
+          list="bocatones-people"
+          placeholder="tu nombre"
+          autocomplete="off"
+          maxlength="40"
+        />
+        <datalist id="bocatones-people">
+          <option v-for="p in knownPeople" :key="p" :value="p" />
+        </datalist>
       </label>
 
       <label class="field">
@@ -92,12 +143,31 @@ function submit() {
           @click="size = 'whole'"
         >🥖 entero</button>
       </div>
+
+      <label class="price">
+        <span class="size-lbl">// precio</span>
+        <span class="price-box">
+          <input
+            v-model="price"
+            type="text"
+            inputmode="decimal"
+            maxlength="7"
+            :placeholder="suggestedTxt || '0,00'"
+            :title="suggestedTxt ? `precio del catálogo: ${suggestedTxt} €` : 'sin precio en el catálogo'"
+            aria-label="precio en euros"
+            @input="priceTouched = true"
+          />
+          <span class="cur" aria-hidden="true">€</span>
+        </span>
+      </label>
     </div>
 
     <div class="quick">
       <span class="quick-lbl">clásicos:</span>
       <span v-for="c in classics" :key="c.id" class="chip">
-        <button type="button" class="chip-pick" @click="pick(c.name)">{{ c.name }}</button>
+        <button type="button" class="chip-pick" @click="pick(c.name)">
+          {{ c.name }}<small v-if="c.priceWhole !== null" class="chip-price">{{ toInput(c.priceWhole) }}€</small>
+        </button>
         <button type="button" class="chip-del" :aria-label="`borrar clásico ${c.name}`" @click="removeClassic(c.id)">✕</button>
       </span>
 
@@ -182,9 +252,43 @@ input:focus {
 .size-row {
   display: flex;
   align-items: center;
-  gap: 0.7rem;
+  flex-wrap: wrap;
+  gap: 0.7rem 1.1rem;
   margin-top: 1.1rem;
 }
+
+/* precio: input estrecho con el símbolo del euro dentro de la caja */
+.price { display: inline-flex; align-items: center; gap: 0.7rem; }
+.price-box {
+  position: relative;
+  display: inline-flex;
+  align-items: center;
+}
+.price-box input {
+  width: 6.5rem;
+  padding: 0.32rem 1.6rem 0.32rem 0.7rem;
+  font-size: 0.9rem;
+  text-align: right;
+  font-variant-numeric: tabular-nums;
+  border-radius: 999px;
+}
+.cur {
+  position: absolute;
+  right: 0.7rem;
+  font-size: 0.8rem;
+  color: var(--ink-faint);
+  pointer-events: none;
+}
+.price-box input:focus + .cur { color: var(--ink); }
+
+/* precio de catálogo dentro del chip del clásico */
+.chip-price {
+  margin-left: 0.5ch;
+  font-size: 0.68rem;
+  color: var(--ink-faint);
+  font-variant-numeric: tabular-nums;
+}
+.chip-pick:hover .chip-price { color: var(--ink-dim); }
 .size-lbl {
   font-size: 0.72rem;
   color: var(--ink-faint);

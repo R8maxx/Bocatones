@@ -5,9 +5,12 @@ import OrderForm from './components/OrderForm.vue'
 import OrderList from './components/OrderList.vue'
 import ThemePicker from './components/ThemePicker.vue'
 import SlotMachine from './components/SlotMachine.vue'
+import HistoryPanel from './components/HistoryPanel.vue'
+import PriceList from './components/PriceList.vue'
 import { useOrders } from './composables/useOrders.js'
 import { useDraw } from './composables/useDraw.js'
 import { personEmoji } from './composables/usePersonEmoji.js'
+import { fmt } from './money.js'
 import { rtStatus } from './realtime.js'
 
 const live = {
@@ -17,11 +20,29 @@ const live = {
 }
 const liveState = computed(() => live[rtStatus.value] || live.offline)
 
-const { orders, count, byFilling, loading, error, freshIds, arrival, addOrder, updateOrder, removeOrder, clearAll, buildPlainList } =
-  useOrders()
+const {
+  orders, count, byFilling, loading, error, freshIds, arrival,
+  debts, debtTotal, dayTotal, dayPending, dayPaidCount,
+  addOrder, updateOrder, removeOrder, setPaid, settle, clearAll, buildPlainList,
+} = useOrders()
 
-// sorteo de quién recoge los bocatas
-const { open: slotOpen, round: slotRound, draw, winner, openMachine, confirmDraw, closeDraw } = useDraw()
+// sorteo de quién recoge los bocatas (ponderado: quien menos ha ido, más papeletas)
+const { open: slotOpen, round: slotRound, draw, winner, odds, openMachine, confirmDraw, closeDraw, toggleAvailable } =
+  useDraw()
+
+// vista actual: el día de hoy o el histórico. Sin router: una sola pantalla.
+const view = ref('today')
+const showPrices = ref(false)
+
+function toggleView() {
+  view.value = view.value === 'today' ? 'history' : 'today'
+}
+
+function askSettle(person, pending) {
+  if (window.confirm(`¿Marcar como pagado todo lo que debe ${person} (${fmt(pending)})?`)) {
+    settle(person)
+  }
+}
 
 // al tirar de la palanca se pide el sorteo al servidor (y aparece en todas las pantallas)
 function onPull() {
@@ -166,8 +187,16 @@ function confirmClear() {
       </p>
 
       <ThemePicker />
+
+      <nav class="nav">
+        <button class="nav-btn" type="button" :class="{ on: view === 'history' }" @click="toggleView">
+          {{ view === 'history' ? '← volver a hoy' : '📜 histórico' }}
+        </button>
+        <button class="nav-btn" type="button" @click="showPrices = true">€ precios</button>
+      </nav>
     </header>
 
+    <template v-if="view === 'today'">
     <main class="layout">
       <section class="col-form">
         <OrderForm @add="addOrder" />
@@ -188,6 +217,44 @@ function confirmClear() {
           <div class="stat-lbl">{{ count === 1 ? 'bocata en cola' : 'bocatas en cola' }}</div>
         </div>
 
+        <!-- dinero: lo de hoy y la deuda que se arrastra de otros días -->
+        <div v-if="count || debts.length" class="money-card">
+          <div class="money-head">// la cuenta</div>
+
+          <div v-if="count" class="money-today">
+            <span class="mt-row">
+              <span class="mt-lbl">hoy</span>
+              <span class="mt-val">{{ fmt(dayTotal) }}</span>
+            </span>
+            <span class="mt-row" :class="dayPending ? 'due' : 'ok'">
+              <span class="mt-lbl">{{ dayPending ? 'sin pagar' : 'todo pagado' }}</span>
+              <span class="mt-val">{{ dayPending ? fmt(dayPending) : '✓' }}</span>
+            </span>
+            <span class="mt-hint">{{ dayPaidCount }}/{{ count }} pedidos pagados</span>
+          </div>
+
+          <div v-if="debts.length" class="debts">
+            <div class="debts-head">
+              deuda acumulada <span class="debts-total">{{ fmt(debtTotal) }}</span>
+            </div>
+            <ul>
+              <li v-for="d in debts" :key="d.name" class="debt-row">
+                <span class="debt-who">
+                  <span class="debt-emoji">{{ personEmoji(d.name) }}</span>
+                  <span class="debt-name">{{ d.name }}</span>
+                </span>
+                <button
+                  class="debt-amount"
+                  type="button"
+                  :title="`saldar la cuenta de ${d.name}`"
+                  @click="askSettle(d.name, d.pending)"
+                >{{ fmt(d.pending) }}</button>
+              </li>
+            </ul>
+            <p class="debts-hint">// pulsa el importe para saldar</p>
+          </div>
+        </div>
+
         <div v-if="byFilling.length" class="tally">
           <div class="tally-head">// recuento para el bar</div>
           <ul>
@@ -204,6 +271,7 @@ function confirmClear() {
                 <span class="t-fill" :style="{ width: (b.n / max) * 100 + '%' }" />
               </span>
               <span class="t-n">{{ sizeSummary(b) }}</span>
+              <span class="t-money">{{ b.money ? fmt(b.money) : '' }}</span>
             </li>
           </ul>
         </div>
@@ -236,7 +304,14 @@ function confirmClear() {
 
       <p v-if="error" class="error">⚠ servidor no disponible — reintentando… ({{ error }})</p>
 
-      <OrderList v-if="count" :orders="orders" :fresh-ids="freshIds" @remove="removeOrder" @update="updateOrder" />
+      <OrderList
+        v-if="count"
+        :orders="orders"
+        :fresh-ids="freshIds"
+        @remove="removeOrder"
+        @update="updateOrder"
+        @paid="setPaid"
+      />
 
       <div v-else-if="loading" class="empty">
         <p>cargando pedido del día… <span class="blink">_</span></p>
@@ -249,6 +324,10 @@ function confirmClear() {
         <p>El cursor parpadea. El bar espera. <span class="blink">_</span></p>
       </div>
     </section>
+
+    </template>
+
+    <HistoryPanel v-else />
 
     <footer class="foot">
       <span>// lista del día compartida · guardada en el servidor</span>
@@ -277,10 +356,14 @@ function confirmClear() {
       :key="slotRound"
       :draw="draw"
       :people="people"
+      :odds="odds"
       @close="closeDraw"
       @pull="onPull"
       @again="openMachine"
+      @toggle="toggleAvailable"
     />
+
+    <PriceList v-if="showPrices" @close="showPrices = false" />
   </div>
 </template>
 
@@ -336,6 +419,34 @@ function confirmClear() {
   color: var(--ink-dim);
 }
 .tagline .bk { color: var(--ink-faint); }
+
+/* ---- navegación: hoy / histórico / precios ---- */
+.nav {
+  display: flex;
+  justify-content: center;
+  flex-wrap: wrap;
+  gap: 0.5rem;
+  margin-top: 1.1rem;
+}
+.nav-btn {
+  font-family: var(--mono);
+  font-size: 0.76rem;
+  letter-spacing: 0.04em;
+  color: var(--ink-dim);
+  background: transparent;
+  border: 1px solid var(--line-2);
+  border-radius: 999px;
+  padding: 0.34rem 0.9rem;
+  cursor: pointer;
+  transition: all 0.15s;
+}
+.nav-btn:hover { color: var(--ink); border-color: var(--ink-dim); }
+.nav-btn.on {
+  color: var(--bg);
+  background: var(--ink);
+  border-color: var(--ink);
+  font-weight: 700;
+}
 
 /* ---- layout ---- */
 .layout {
@@ -411,6 +522,79 @@ function confirmClear() {
   margin-top: 0.5rem;
 }
 
+/* ---- la cuenta: dinero de hoy + deuda arrastrada ---- */
+.money-card {
+  border: 1px solid var(--line-2);
+  border-radius: var(--radius);
+  padding: 1rem 1.1rem;
+  background: var(--panel);
+}
+.money-head {
+  font-size: 0.72rem;
+  color: var(--ink-faint);
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  margin-bottom: 0.8rem;
+}
+.money-today { display: flex; flex-direction: column; gap: 0.3rem; }
+.mt-row {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 0.8rem;
+  font-size: 0.84rem;
+  color: var(--ink-dim);
+}
+.mt-val { font-variant-numeric: tabular-nums; color: var(--ink); }
+.mt-row.due .mt-lbl, .mt-row.due .mt-val { color: var(--g6); font-weight: 700; }
+.mt-row.ok .mt-lbl, .mt-row.ok .mt-val { color: var(--g5); }
+.mt-hint { font-size: 0.68rem; color: var(--ink-faint); margin-top: 0.15rem; }
+
+.debts { margin-top: 1rem; padding-top: 0.85rem; border-top: 1px dashed var(--line-2); }
+.debts-head {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 0.7rem;
+  font-size: 0.7rem;
+  text-transform: uppercase;
+  letter-spacing: 0.07em;
+  color: var(--ink-faint);
+  margin-bottom: 0.6rem;
+}
+.debts-total { color: var(--g6); font-weight: 700; font-variant-numeric: tabular-nums; }
+.debts ul { list-style: none; display: flex; flex-direction: column; gap: 0.35rem; }
+.debt-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.6rem;
+  font-size: 0.82rem;
+}
+.debt-who { min-width: 0; display: inline-flex; align-items: center; gap: 0.5ch; }
+.debt-emoji { font-size: 1.05rem; line-height: 1; }
+.debt-name {
+  color: var(--ink);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.debt-amount {
+  font-family: var(--mono);
+  font-size: 0.78rem;
+  font-variant-numeric: tabular-nums;
+  color: var(--g6);
+  background: transparent;
+  border: 1px solid color-mix(in srgb, var(--g6) 40%, var(--line-2));
+  border-radius: 999px;
+  padding: 0.16rem 0.55rem;
+  cursor: pointer;
+  white-space: nowrap;
+  transition: all 0.15s;
+}
+.debt-amount:hover { color: var(--bg); background: var(--g6); border-color: var(--g6); }
+.debts-hint { font-size: 0.66rem; color: var(--ink-faint); margin-top: 0.55rem; }
+
 .tally {
   border: 1px solid var(--line);
   border-radius: var(--radius);
@@ -427,9 +611,9 @@ function confirmClear() {
 .tally ul { list-style: none; display: flex; flex-direction: column; gap: 0.55rem; }
 .tally-row {
   display: grid;
-  grid-template-columns: 1fr 56px auto;
+  grid-template-columns: 1fr 40px auto auto;
   align-items: center;
-  gap: 0.7rem;
+  gap: 0.55rem;
   font-size: 0.8rem;
 }
 .t-name { min-width: 0; display: flex; flex-direction: column; gap: 0.1rem; }
@@ -460,6 +644,13 @@ function confirmClear() {
   transition: width 0.4s ease;
 }
 .t-n { color: var(--ink-dim); font-variant-numeric: tabular-nums; }
+.t-money {
+  color: var(--ink-faint);
+  font-size: 0.74rem;
+  font-variant-numeric: tabular-nums;
+  text-align: right;
+  white-space: nowrap;
+}
 
 /* ---- orders ---- */
 .orders-head {
