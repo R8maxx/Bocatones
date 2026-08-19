@@ -626,6 +626,22 @@ function confirmClear() {
   font-weight: 700;
 }
 
+/*
+ * <main> envuelve las dos vistas para que el documento no se quede sin landmark
+ * principal en el histórico. Al meterlo, .layout y .orders dejaron de ser hijos
+ * de .page y perdieron su `gap`: la tarjeta del recuento acababa pegada a los
+ * botones de la cola, sin un pixel de separación. Aquí se les devuelve el ritmo.
+ */
+main {
+  display: flex;
+  flex-direction: column;
+  gap: clamp(1.1rem, 2.6vw, 1.9rem);
+}
+
+/* algo más de aire del que da el gap: encima acaba una tarjeta y debajo empieza
+   una fila de botones, y eso necesita más separación que dos bloques de texto */
+.orders { margin-top: var(--sp-2); }
+
 /* ---- layout ---- */
 .layout {
   display: grid;
