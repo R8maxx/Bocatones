@@ -43,14 +43,23 @@ const { bg, setBg, reset, PRESETS, DEFAULT_BG } = useTheme()
   margin-top: 1.1rem;
 }
 .lbl {
-  font-size: 0.7rem;
+  font-size: var(--fs-1);
   letter-spacing: 0.08em;
   text-transform: uppercase;
   color: var(--ink-faint);
 }
 .swatches { display: inline-flex; gap: 0.4rem; }
 
+/* el swatch sigue midiendo 20px a la vista, pero su área táctil llega a 28px
+   (WCAG 2.5.8 pide 24 mínimo) */
+.sw::after {
+  content: '';
+  position: absolute;
+  inset: -4px;
+  border-radius: 50%;
+}
 .sw {
+  position: relative;
   width: 20px;
   height: 20px;
   border-radius: 50%;
@@ -71,7 +80,7 @@ const { bg, setBg, reset, PRESETS, DEFAULT_BG } = useTheme()
   overflow: hidden;
 }
 .sw.custom .plus {
-  font-size: 0.8rem;
+  font-size: var(--fs-2);
   line-height: 1;
   color: var(--ink);
   mix-blend-mode: difference;
@@ -87,7 +96,7 @@ const { bg, setBg, reset, PRESETS, DEFAULT_BG } = useTheme()
 
 .reset {
   font-family: var(--mono);
-  font-size: 0.68rem;
+  font-size: var(--fs-1);
   letter-spacing: 0.06em;
   text-transform: uppercase;
   color: var(--ink-dim);
@@ -96,7 +105,7 @@ const { bg, setBg, reset, PRESETS, DEFAULT_BG } = useTheme()
   border-radius: 999px;
   padding: 0.15rem 0.6rem;
   cursor: pointer;
-  transition: all 0.15s;
+  transition: color 0.15s, border-color 0.15s;
 }
 .reset:hover { color: var(--ink); border-color: var(--ink); }
 </style>

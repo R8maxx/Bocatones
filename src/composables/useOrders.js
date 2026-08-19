@@ -2,6 +2,7 @@ import { ref, computed } from 'vue'
 import { api, todayKey, clientId } from '../api.js'
 import { onMessage, startRealtime } from '../realtime.js'
 import { fmt } from '../money.js'
+import { notifyError, notifyOk, notifyUndo } from './useNotices.js'
 
 /*
  * useOrders — lista del día COMPARTIDA, servida por el backend (SQLite).
@@ -11,9 +12,15 @@ import { fmt } from '../money.js'
  *
  * Además de los pedidos de hoy lleva la DEUDA ACUMULADA por persona (todos los
  * días pendientes, no solo hoy), que viene del resumen del histórico.
+ *
+ * Todas las mutaciones avisan si fallan y deshacen su cambio optimista: antes
+ * fallaban en silencio y se podía perder un pedido sin enterarse.
  */
 
-const orders = ref([])
+const allOrders = ref([])
+// ids ocultos localmente mientras corre el plazo de "deshacer". Se filtran
+// aunque llegue un mensaje del WebSocket, para que la fila no reaparezca sola.
+const hidden = ref(new Set())
 const day = ref(todayKey())
 const loading = ref(true)
 const error = ref(null)
@@ -23,12 +30,25 @@ const debts = ref([]) // [{ name, pending, ... }] con pendiente > 0, de todos lo
 let started = false
 let ready = false // ya hemos cargado al menos una vez
 
+const visible = computed(() => allOrders.value.filter((o) => !hidden.value.has(o.id)))
+
+function hide(id) {
+  const s = new Set(hidden.value)
+  s.add(id)
+  hidden.value = s
+}
+function unhide(id) {
+  const s = new Set(hidden.value)
+  s.delete(id)
+  hidden.value = s
+}
+
 async function refresh() {
   try {
     // si ha cambiado el día (medianoche), apuntamos al nuevo
     const d = todayKey()
     if (d !== day.value) day.value = d
-    orders.value = await api.listOrders(day.value)
+    allOrders.value = await api.listOrders(day.value)
     error.value = null
     ready = true
   } catch (e) {
@@ -111,10 +131,10 @@ function start() {
       refreshDebts()
       if (msg.days?.includes(day.value)) refresh()
     } else if (msg.type === 'orders' && msg.day === day.value) {
-      const prevList = orders.value
+      const prevList = allOrders.value
       const prevIds = new Set(prevList.map((o) => o.id))
       const incomingIds = new Set(msg.orders.map((o) => o.id))
-      orders.value = msg.orders
+      allOrders.value = msg.orders
       loading.value = false
       error.value = null
       // solo avisamos si ya habíamos cargado y el cambio NO lo hice yo
@@ -137,20 +157,20 @@ function start() {
 export function useOrders() {
   if (typeof window !== 'undefined') start()
 
-  const count = computed(() => orders.value.length)
+  const count = computed(() => visible.value.length)
 
   // dinero del día: total pedido y lo que queda por cobrar
-  const dayTotal = computed(() => orders.value.reduce((s, o) => s + (o.price || 0), 0))
+  const dayTotal = computed(() => visible.value.reduce((s, o) => s + (o.price || 0), 0))
   const dayPending = computed(() =>
-    orders.value.reduce((s, o) => s + (o.paid ? 0 : o.price || 0), 0),
+    visible.value.reduce((s, o) => s + (o.paid ? 0 : o.price || 0), 0),
   )
-  const dayPaidCount = computed(() => orders.value.filter((o) => o.paid).length)
+  const dayPaidCount = computed(() => visible.value.filter((o) => o.paid).length)
   const debtTotal = computed(() => debts.value.reduce((s, d) => s + d.pending, 0))
 
   // agrupa los pedidos por relleno + pan + extras (conservando el texto original)
   function groupOrders() {
     const groups = new Map()
-    for (const o of orders.value) {
+    for (const o of visible.value) {
       const filling = (o.filling || '???').trim()
       const bread = (o.bread || '').trim()
       const notes = (o.notes || '').trim()
@@ -179,38 +199,82 @@ export function useOrders() {
     ),
   )
 
+  // devuelve el pedido creado; lanza si falla, para que el formulario NO se vacíe
   async function addOrder(fields) {
-    const created = await api.addOrder(day.value, fields)
-    // alta optimista, pero evitando duplicar si el WS ya lo añadió
-    if (!orders.value.some((o) => o.id === created.id)) {
-      orders.value = [created, ...orders.value]
+    try {
+      const created = await api.addOrder(day.value, fields)
+      // alta optimista, pero evitando duplicar si el WS ya lo añadió
+      if (!allOrders.value.some((o) => o.id === created.id)) {
+        allOrders.value = [created, ...allOrders.value]
+      }
+      refreshDebts()
+      return created
+    } catch (e) {
+      notifyError('No se ha podido añadir el pedido', e)
+      throw e
     }
-    refreshDebts()
   }
 
   async function updateOrder(id, fields) {
-    const updated = await api.updateOrder(id, fields)
-    orders.value = orders.value.map((o) => (o.id === id ? updated : o))
-    refreshDebts()
+    try {
+      const updated = await api.updateOrder(id, fields)
+      allOrders.value = allOrders.value.map((o) => (o.id === id ? updated : o))
+      refreshDebts()
+      return updated
+    } catch (e) {
+      notifyError('No se han podido guardar los cambios', e)
+      throw e
+    }
   }
 
-  async function removeOrder(id) {
-    orders.value = orders.value.filter((o) => o.id !== id) // optimista
-    await api.removeOrder(id)
-    refreshDebts()
+  /*
+   * Borrar con deshacer: la fila desaparece al instante pero el DELETE no se
+   * envía hasta que se agota el plazo. Así el "deshacer" es de verdad gratis y
+   * no hace falta un window.confirm para cada baja.
+   */
+  function removeOrder(id) {
+    const gone = allOrders.value.find((o) => o.id === id)
+    hide(id)
+    notifyUndo(`Pedido de ${gone?.person || 'alguien'} eliminado`, {
+      onUndo: () => unhide(id),
+      onExpire: async () => {
+        try {
+          await api.removeOrder(id)
+          unhide(id) // ya no está en el servidor: sobra el filtro local
+          refreshDebts()
+        } catch (e) {
+          unhide(id) // vuelve a la lista: no se ha borrado
+          notifyError('No se ha podido eliminar el pedido', e)
+        }
+      },
+    })
   }
 
   async function clearAll() {
-    orders.value = []
-    await api.clearDay(day.value)
-    refreshDebts()
+    const prev = allOrders.value
+    allOrders.value = [] // optimista
+    try {
+      await api.clearDay(day.value)
+      notifyOk('Pedido del día vaciado')
+      refreshDebts()
+    } catch (e) {
+      allOrders.value = prev // rollback: antes se esperaban 30 s al refresco
+      notifyError('No se ha podido vaciar el pedido', e)
+    }
   }
 
   // marca como pagado todo lo que debe una persona (opcionalmente de un solo día)
   async function settle(person, onlyDay) {
-    await api.settle(person, onlyDay)
-    refreshDebts()
-    refresh()
+    try {
+      const res = await api.settle(person, onlyDay)
+      notifyOk(`Cuenta de ${person} saldada`)
+      refreshDebts()
+      refresh()
+      return res
+    } catch (e) {
+      notifyError(`No se ha podido saldar la cuenta de ${person}`, e)
+      throw e
+    }
   }
 
   // atajo para el check de la lista
@@ -256,7 +320,7 @@ export function useOrders() {
   }
 
   return {
-    orders,
+    orders: visible,
     day,
     count,
     byFilling,

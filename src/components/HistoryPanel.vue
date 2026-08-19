@@ -1,9 +1,13 @@
 <script setup>
 import { computed, onMounted, ref } from 'vue'
 import OrderList from './OrderList.vue'
+import MoneyValue from './MoneyValue.vue'
 import { useHistory } from '../composables/useHistory.js'
+import { todayKey } from '../api.js'
 import { personEmoji } from '../composables/usePersonEmoji.js'
+import { useMe } from '../composables/useMe.js'
 import { fmt, fmtOrDash } from '../money.js'
+import { confirmSettle } from '../composables/useSettle.js'
 
 /*
  * HistoryPanel — modo histórico. Tres bloques:
@@ -14,8 +18,15 @@ import { fmt, fmtOrDash } from '../money.js'
  * Se monta solo al entrar en el histórico, así que la carga es perezosa.
  */
 
-const { days, selectedDay, dayDetail, people, odds, totals, loading, error, load, select, setPaid, settle, setWinner } =
-  useHistory()
+const { isMe } = useMe()
+
+const {
+  days, selectedDay, dayDetail, people, odds, totals,
+  loading, detailLoading, ready, error,
+  load, select, setPaid, settle, setWinner,
+} = useHistory()
+
+const today = todayKey()
 
 onMounted(load)
 
@@ -56,20 +67,18 @@ const pct = (chance) => PCT.format(chance)
 const maxSpent = computed(() => Math.max(1, ...people.value.map((p) => p.spent)))
 
 function askSettle(person, pending) {
-  if (window.confirm(`¿Marcar como pagado todo lo que debe ${person} (${fmt(pending)})?`)) {
-    settle(person)
-  }
+  if (confirmSettle(person, pending)) settle(person)
 }
 </script>
 
 <template>
   <div class="hist">
-    <p v-if="error" class="h-error">⚠ no se pudo cargar el histórico — {{ error }}</p>
+    <p v-if="error" class="h-error" role="alert">⚠ no se pudo cargar el histórico — {{ error }}</p>
 
     <!-- ================= días ================= -->
     <section class="block">
       <div class="b-head">
-        <h2><span class="hash">#</span> días anteriores</h2>
+        <h2><span class="hash" aria-hidden="true">#</span> todos los días</h2>
         <span v-if="days.length" class="b-meta">
           {{ totals.orders }} bocatas · {{ fmt(totals.total) }}
           <template v-if="totals.pending"> · <b class="due">{{ fmt(totals.pending) }} sin pagar</b></template>
@@ -79,8 +88,17 @@ function askSettle(person, pending) {
       <p v-if="loading && !days.length" class="h-empty">cargando histórico… <span class="blink">_</span></p>
       <p v-else-if="!days.length" class="h-empty">todavía no hay días guardados.</p>
 
-      <ul v-else class="d-rows">
-        <li v-for="d in days" :key="d.day">
+      <div class="d-cols" aria-hidden="true">
+        <span />
+        <span>día</span>
+        <span>recogió</span>
+        <span>bocatas</span>
+        <span>total</span>
+        <span>debe</span>
+      </div>
+
+      <ul class="d-rows">
+        <li v-for="(d, i) in days" :key="d.day" :style="{ '--i': Math.min(i, 12) }">
           <button
             class="d-row"
             type="button"
@@ -89,20 +107,37 @@ function askSettle(person, pending) {
             @click="select(d.day)"
           >
             <span class="d-caret" aria-hidden="true">{{ selectedDay === d.day ? '▾' : '▸' }}</span>
-            <span class="d-date">{{ dayLabel(d.day) }}</span>
+            <span class="d-date">
+              <span>{{ dayLabel(d.day) }}</span>
+              <small v-if="d.day === today" class="d-today">hoy</small>
+            </span>
             <span class="d-who">
               <template v-if="d.winner">
                 <span class="d-emoji">{{ personEmoji(d.winner) }}</span>{{ d.winner }}
               </template>
               <span v-else class="d-nowho">— sin sorteo —</span>
             </span>
-            <span class="d-n">{{ d.orders }} 🥪</span>
-            <span class="d-total">{{ fmtOrDash(d.total) }}</span>
-            <span class="d-pend" :class="{ zero: !d.pending }">{{ d.pending ? fmt(d.pending) : '✓' }}</span>
+            <span class="d-n">
+              {{ d.orders }}<span aria-hidden="true"> 🥪</span>
+              <span class="sr-only"> bocatas</span>
+            </span>
+            <span class="d-total">
+              <span class="d-lbl" aria-hidden="true">total</span>
+              <MoneyValue :cents="d.total" dash />
+            </span>
+            <span class="d-pend" :class="{ zero: !d.pending }">
+              <span class="d-lbl" aria-hidden="true">debe</span>
+              <template v-if="d.pending"><MoneyValue :cents="d.pending" /></template>
+              <template v-else><span aria-hidden="true">✓</span><span class="sr-only">todo pagado</span></template>
+            </span>
           </button>
 
           <!-- detalle del día -->
-          <div v-if="selectedDay === d.day && dayDetail" class="d-detail">
+          <div v-if="selectedDay === d.day && detailLoading && !dayDetail" class="d-detail">
+            <p class="h-empty">cargando el día… <span class="blink" aria-hidden="true">_</span></p>
+          </div>
+
+          <div v-else-if="selectedDay === d.day && dayDetail" class="d-detail">
             <div class="dd-head">
               <span class="dd-lbl">// recogió</span>
               <template v-if="!editingWinner">
@@ -132,36 +167,48 @@ function askSettle(person, pending) {
               readonly
               @paid="setPaid"
             />
+            <p v-else class="h-empty">ese día no se pidió nada.</p>
           </div>
         </li>
       </ul>
     </section>
 
     <!-- ================= por persona ================= -->
-    <section class="block">
+    <section v-reveal class="block">
       <div class="b-head">
         <h2><span class="hash">#</span> por persona</h2>
-        <span class="b-meta">gasto · deuda · veces que ha ido</span>
+        <span class="b-meta">bocatas · veces que ha ido · gasto · deuda</span>
       </div>
 
-      <p v-if="!people.length" class="h-empty">nadie ha pedido todavía.</p>
+      <p v-if="!ready" class="h-empty">cargando… <span class="blink" aria-hidden="true">_</span></p>
+      <p v-else-if="!people.length" class="h-empty">nadie ha pedido todavía.</p>
 
       <ul v-else class="p-rows">
-        <li v-for="p in people" :key="p.name" class="p-row">
+        <li
+          v-for="(p, i) in people"
+          :key="p.name"
+          class="p-row"
+          :class="{ mine: isMe(p.name) }"
+          :style="{ '--i': Math.min(i, 12) }"
+        >
           <span class="p-who">
             <span class="d-emoji">{{ personEmoji(p.name) }}</span>
             <span class="p-name">{{ p.name }}</span>
           </span>
           <span class="p-bar" aria-hidden="true">
-            <span class="p-fill" :style="{ width: (p.spent / maxSpent) * 100 + '%' }" />
+            <span class="p-fill" :style="{ '--fill': p.spent / maxSpent }" />
           </span>
-          <span class="p-num" :title="`${p.orders} bocatas en ${p.days} días`">{{ p.orders }} 🥪</span>
-          <span class="p-num">{{ p.gone }}× 🎰</span>
-          <span class="p-num spent">{{ fmtOrDash(p.spent) }}</span>
+          <span class="p-num" :title="`${p.orders} bocatas en ${p.days} días`">
+            {{ p.orders }}<span aria-hidden="true"> 🥪</span><span class="sr-only"> bocatas</span>
+          </span>
+          <span class="p-num">
+            {{ p.gone }}×<span aria-hidden="true"> 🎰</span><span class="sr-only"> veces que ha ido</span>
+          </span>
+          <span class="p-num spent"><MoneyValue :cents="p.spent" dash /></span>
           <span class="p-pend">
             <template v-if="p.pending">
               <button class="p-settle" type="button" @click="askSettle(p.name, p.pending)">
-                debe {{ fmt(p.pending) }} · saldar
+                <span>debe</span>&nbsp;<MoneyValue :cents="p.pending" />&nbsp;<span>· saldar</span>
               </button>
             </template>
             <span v-else class="p-ok">✓ al día</span>
@@ -171,13 +218,14 @@ function askSettle(person, pending) {
     </section>
 
     <!-- ================= a quién le toca ================= -->
-    <section class="block">
+    <section v-reveal class="block">
       <div class="b-head">
         <h2><span class="hash">#</span> a quién le toca</h2>
         <span class="b-meta">papeletas del sorteo de hoy</span>
       </div>
 
-      <p v-if="!odds || !odds.candidates.length" class="h-empty">
+      <p v-if="!ready" class="h-empty">cargando… <span class="blink" aria-hidden="true">_</span></p>
+      <p v-else-if="!odds || !odds.candidates.length" class="h-empty">
         no hay pedidos de hoy: no hay nada que sortear todavía.
       </p>
 
@@ -192,7 +240,13 @@ function askSettle(person, pending) {
           (no se penaliza el sorteo que se reemplaza).
         </p>
         <ul class="o-rows">
-          <li v-for="c in odds.candidates" :key="c.name" class="o-row" :class="{ away: !c.available }">
+          <li
+            v-for="(c, i) in odds.candidates"
+            :key="c.name"
+            class="o-row"
+            :class="{ away: !c.available, mine: isMe(c.name) }"
+            :style="{ '--i': Math.min(i, 12) }"
+          >
             <span class="p-who">
               <span class="d-emoji">{{ personEmoji(c.name) }}</span>
               <span class="p-name">{{ c.name }}</span>
@@ -206,7 +260,7 @@ function askSettle(person, pending) {
             <span v-if="!c.available" class="o-awaytxt">hoy no puede ir</span>
             <template v-else>
               <span class="o-bar" aria-hidden="true">
-                <span class="o-fill" :style="{ width: c.chance * 100 + '%' }" />
+                <span class="o-fill" :style="{ '--fill': c.chance }" />
               </span>
               <span class="o-pct">{{ pct(c.chance) }}</span>
             </template>
@@ -232,17 +286,17 @@ function askSettle(person, pending) {
   border-bottom: 1px solid var(--line-2);
 }
 .b-head h2 {
-  font-size: 0.95rem;
+  font-size: var(--fs-3);
   font-weight: 700;
   letter-spacing: 0.04em;
   text-transform: uppercase;
 }
 .hash { color: var(--ink-faint); }
-.b-meta { font-size: 0.72rem; color: var(--ink-faint); letter-spacing: 0.04em; }
+.b-meta { font-size: var(--fs-2); color: var(--ink-faint); letter-spacing: 0.04em; }
 .due { color: var(--g6); font-weight: 700; }
 
 .h-error {
-  font-size: 0.8rem;
+  font-size: var(--fs-2);
   color: var(--g6);
   border: 1px solid var(--g6);
   border-radius: var(--radius);
@@ -250,7 +304,7 @@ function askSettle(person, pending) {
   background: rgba(212, 105, 30, 0.08);
 }
 .h-empty {
-  font-size: 0.84rem;
+  font-size: var(--fs-3);
   color: var(--ink-dim);
   padding: 1.4rem 0.2rem;
   text-align: center;
@@ -258,18 +312,59 @@ function askSettle(person, pending) {
 .blink { animation: blink 1s steps(1) infinite; }
 @keyframes blink { 50% { opacity: 0.15; } }
 
+/* cabecera de columnas: antes la fila terminaba en dos importes idénticos sin
+   forma de saber cuál era el total y cuál lo pendiente */
+.d-cols {
+  display: grid;
+  grid-template-columns: 1rem minmax(5.6rem, auto) minmax(0, 1fr) auto minmax(4.6rem, auto) minmax(4.6rem, auto);
+  gap: 0.7rem;
+  padding: 0 0.8rem var(--sp-1);
+  font-size: 0.62rem;
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+  color: var(--ink-faint);
+}
+.d-cols span:nth-child(n + 4) { text-align: right; }
+
+.d-today {
+  font-size: 0.6rem;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--bg);
+  background: var(--ink-dim);
+  border-radius: var(--radius-pill);
+  padding: 0.05rem 0.4rem;
+}
+
+/* etiqueta corta delante de cada importe: solo aparece cuando la cabecera de
+   columnas desaparece por falta de sitio */
+.d-lbl { display: none; }
+
 /* ---- días ---- */
-.d-rows, .p-rows, .o-rows { list-style: none; display: flex; flex-direction: column; gap: 0.45rem; }
+.d-rows, .p-rows, .o-rows { list-style: none; display: flex; flex-direction: column; gap: var(--sp-2); }
+
+/* entrada escalonada, igual que en la cola de pedidos */
+.d-rows > li,
+.p-rows > li,
+.o-rows > li {
+  animation: hist-in 0.4s cubic-bezier(0.2, 0.8, 0.2, 1) backwards;
+  animation-delay: calc(var(--i, 0) * 40ms);
+}
+@keyframes hist-in {
+  from { opacity: 0; transform: translateY(-6px); }
+}
 
 .d-row {
   width: 100%;
   display: grid;
-  grid-template-columns: 1rem 5.6rem 1fr auto 4.6rem 4.6rem;
+  /* los importes van en minmax(): "1.234,50 €" son 10 caracteres y no cabían
+     en un track fijo de 4.6rem, así que se salían y se solapaban */
+  grid-template-columns: 1rem minmax(5.6rem, auto) minmax(0, 1fr) auto minmax(4.6rem, auto) minmax(4.6rem, auto);
   align-items: center;
   gap: 0.7rem;
   text-align: left;
   font-family: var(--mono);
-  font-size: 0.82rem;
+  font-size: var(--fs-2);
   color: var(--ink-dim);
   background: var(--bg-soft);
   border: 1px solid var(--line);
@@ -282,7 +377,7 @@ function askSettle(person, pending) {
 .d-row:hover { border-left-color: var(--ink); background: var(--panel); transform: translateX(3px); }
 .d-row.open { border-left-color: var(--g7); background: var(--panel); color: var(--ink); }
 .d-caret { color: var(--ink-faint); }
-.d-date { color: var(--ink); white-space: nowrap; }
+.d-date { color: var(--ink); white-space: nowrap; display: inline-flex; align-items: center; gap: 0.5ch; }
 .d-who {
   min-width: 0;
   display: inline-flex;
@@ -292,16 +387,32 @@ function askSettle(person, pending) {
   text-overflow: ellipsis;
   white-space: nowrap;
 }
-.d-emoji { font-size: 1.05rem; line-height: 1; }
+.d-emoji { font-size: var(--fs-4); line-height: 1; }
 .d-nowho { color: var(--ink-faint); font-style: italic; }
-.d-n, .d-total, .d-pend { font-variant-numeric: tabular-nums; text-align: right; white-space: nowrap; }
+.d-n, .d-total, .d-pend {
+  font-variant-numeric: tabular-nums;
+  text-align: right;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
 .d-pend { color: var(--g6); }
 .d-pend.zero { color: var(--g5); }
 
 @media (max-width: 720px) {
+  .d-cols { display: none; }
   .d-row { grid-template-columns: 1rem 1fr auto auto; }
   .d-who { grid-column: 2; }
   .d-total { display: none; }
+  /* sin cabecera de columnas, cada importe lleva su etiqueta */
+  .d-lbl {
+    display: inline;
+    margin-right: 0.4ch;
+    font-size: 0.6rem;
+    text-transform: uppercase;
+    letter-spacing: 0.06em;
+    color: var(--ink-faint);
+  }
 }
 
 .d-detail {
@@ -319,26 +430,29 @@ function askSettle(person, pending) {
   margin-bottom: 0.9rem;
   padding-bottom: 0.7rem;
   border-bottom: 1px dashed var(--line-2);
-  font-size: 0.8rem;
+  font-size: var(--fs-2);
 }
-.dd-lbl { font-size: 0.7rem; text-transform: uppercase; letter-spacing: 0.08em; color: var(--ink-faint); }
+.dd-lbl { font-size: var(--fs-1); text-transform: uppercase; letter-spacing: 0.08em; color: var(--ink-faint); }
 .dd-winner { display: inline-flex; align-items: center; gap: 0.45ch; color: var(--ink); font-weight: 700; }
 .dd-money { margin-left: auto; color: var(--ink-dim); font-variant-numeric: tabular-nums; }
 .dd-fix, .p-settle {
+  display: inline-flex;
+  align-items: center;
+  min-height: var(--tap);
   font-family: var(--mono);
-  font-size: 0.7rem;
+  font-size: var(--fs-1);
   color: var(--ink-dim);
   background: transparent;
   border: 1px solid var(--line-2);
   border-radius: 999px;
   padding: 0.2rem 0.6rem;
   cursor: pointer;
-  transition: all 0.15s;
+  transition: color 0.15s, background 0.15s, border-color 0.15s;
 }
 .dd-fix:hover { color: var(--bg); background: var(--g7); border-color: var(--g7); }
 .dd-sel {
   font-family: var(--mono);
-  font-size: 0.8rem;
+  font-size: var(--fs-2);
   color: var(--ink);
   background: var(--bg-soft);
   border: 1px solid var(--ink);
@@ -351,21 +465,45 @@ function askSettle(person, pending) {
   display: grid;
   align-items: center;
   gap: 0.7rem;
-  font-size: 0.82rem;
+  font-size: var(--fs-2);
   background: var(--bg-soft);
   border: 1px solid var(--line);
   border-radius: var(--radius);
   padding: 0.6rem 0.8rem;
 }
-.p-row { grid-template-columns: minmax(6rem, 1fr) 60px auto auto 4.8rem auto; }
+/* el gasto acumulado por persona crece con los meses: minmax(), no fijo */
+.p-row { grid-template-columns: minmax(6rem, 1fr) 60px auto auto minmax(4.8rem, auto) auto; }
 .p-who { min-width: 0; display: inline-flex; align-items: center; gap: 0.5ch; }
+
+/* tu propia fila */
+.p-row.mine, .o-row.mine { border-color: var(--ink-dim); background: var(--panel); }
+.p-row.mine .p-name, .o-row.mine .p-name { font-weight: 700; }
 .p-name { color: var(--ink); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .p-bar, .o-bar { height: 6px; background: var(--line); border-radius: 999px; overflow: hidden; }
-.p-fill { display: block; height: 100%; background: var(--ink-dim); border-radius: 999px; transition: width 0.4s ease; }
-.p-num { color: var(--ink-dim); font-variant-numeric: tabular-nums; white-space: nowrap; text-align: right; }
+.p-fill, .o-fill {
+  display: block;
+  width: 100%;
+  height: 100%;
+  border-radius: var(--radius-pill);
+  transform: scaleX(0);
+  transform-origin: left;
+  transition: transform 0.45s cubic-bezier(0.2, 0.8, 0.2, 1);
+}
+.p-fill { background: var(--ink-dim); }
+.o-fill { background: var(--ink); }
+.block.is-revealed .p-fill,
+.block.is-revealed .o-fill { transform: scaleX(var(--fill, 0)); }
+.p-num {
+  color: var(--ink-dim);
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+  text-align: right;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
 .p-num.spent { color: var(--ink); }
 .p-pend { text-align: right; }
-.p-ok { font-size: 0.74rem; color: var(--g5); white-space: nowrap; }
+.p-ok { font-size: var(--fs-2); color: var(--g5); white-space: nowrap; }
 .p-settle { color: var(--g6); border-color: color-mix(in srgb, var(--g6) 45%, var(--line-2)); white-space: nowrap; }
 .p-settle:hover { color: var(--bg); background: var(--g6); border-color: var(--g6); }
 
@@ -376,13 +514,13 @@ function askSettle(person, pending) {
 }
 
 /* ---- a quién le toca ---- */
-.o-note { font-size: 0.76rem; color: var(--ink-dim); margin-bottom: 0.9rem; }
+.o-note { font-size: var(--fs-2); color: var(--ink-dim); margin-bottom: 0.9rem; }
 .o-done {
   display: flex;
   align-items: center;
   gap: 0.5ch;
   flex-wrap: wrap;
-  font-size: 0.74rem;
+  font-size: var(--fs-2);
   color: var(--ink-dim);
   border-left: 2px solid var(--g5);
   padding: 0.45rem 0.7rem;
@@ -391,23 +529,22 @@ function askSettle(person, pending) {
 }
 .o-done b { color: var(--ink); }
 .o-row { grid-template-columns: minmax(6rem, 1fr) auto minmax(60px, 130px) 4rem; }
-.o-gone { display: inline-flex; align-items: center; gap: 0.5ch; color: var(--ink-faint); font-size: 0.74rem; }
+.o-gone { display: inline-flex; align-items: center; gap: 0.5ch; color: var(--ink-faint); font-size: var(--fs-2); }
 .o-dots { display: inline-flex; gap: 2px; }
 .o-dots i { width: 5px; height: 5px; border-radius: 50%; background: var(--ink-faint); }
 .o-gone-n { white-space: nowrap; font-variant-numeric: tabular-nums; }
-.o-fill { display: block; height: 100%; background: var(--ink); border-radius: 999px; transition: width 0.4s ease; }
 .o-row.away { opacity: 0.55; }
 .o-row.away .p-name { text-decoration: line-through; }
 .o-awaytxt {
   grid-column: 3 / -1;
   text-align: right;
-  font-size: 0.7rem;
+  font-size: var(--fs-1);
   color: var(--g6);
   white-space: nowrap;
 }
 .o-pct {
   font-family: var(--crt);
-  font-size: 1.15rem;
+  font-size: var(--fs-4);
   line-height: 1;
   color: var(--ink);
   text-align: right;

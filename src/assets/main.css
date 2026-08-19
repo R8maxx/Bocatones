@@ -2,14 +2,33 @@
 
 #app {
   position: relative;
-  z-index: 1;
+  z-index: var(--z-base);
   max-width: var(--maxw);
-  margin: 0 auto;
+  margin-inline: auto;
   padding: clamp(1.1rem, 3vw, 2.5rem);
 }
 
-/* shared focus ring */
-:where(button, input, textarea, select):focus-visible {
-  outline: 2px solid var(--ink);
+/*
+ * Anillo de foco por teclado.
+ *
+ * Antes esto usaba :where(), que tiene especificidad 0, así que cuatro reglas
+ * de componente lo pisaban con `outline: none` sobre :focus y NINGÚN input del
+ * proyecto mostraba foco. Ahora la especificidad gana y el `!important` lo
+ * blinda: es un requisito de accesibilidad, no una preferencia estética.
+ */
+button:focus-visible,
+input:focus-visible,
+textarea:focus-visible,
+select:focus-visible,
+a:focus-visible,
+[tabindex]:focus-visible {
+  outline: 2px solid var(--ink) !important;
   outline-offset: 2px;
+}
+
+/* el <input type="color"> del selector de tema es opacity:0, así que su anillo
+   sería invisible: lo pinta el <label> que lo envuelve */
+label:has(input[type='color']:focus-visible) {
+  outline: 2px solid var(--ink);
+  outline-offset: 3px;
 }

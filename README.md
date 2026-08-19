@@ -190,12 +190,20 @@ bocatones/
    │  ├─ SlotMachine.vue    # tragaperras del sorteo, con las papeletas a la vista
    │  ├─ HistoryPanel.vue   # modo histórico: días, por persona, a quién le toca
    │  ├─ PriceList.vue      # editor del catálogo de precios
+   │  ├─ MoneyValue.vue     # importe que cuenta hasta su valor nuevo
+   │  ├─ Notices.vue        # avisos: errores, confirmaciones y deshacer
    │  └─ ThemePicker.vue    # selector de color de fondo
    └─ composables/
       ├─ useOrders.js       # lista del día + dinero + deuda (REST + WebSocket)
       ├─ useDraw.js         # sorteo compartido y papeletas
       ├─ useHistory.js      # modo histórico (carga perezosa)
       ├─ useClassics.js     # catálogo de clásicos y sus precios
+      ├─ useNotices.js      # canal de avisos del sistema
+      ├─ useModal.js        # foco, focus trap y Escape de los diálogos
+      ├─ useMe.js           # quién eres tú, para distinguir lo tuyo
+      ├─ useCountUp.js      # interpolación de los importes
+      ├─ useReveal.js       # directiva v-reveal (entrar en pantalla)
+      ├─ useSettle.js       # confirmación de saldar, compartida
       ├─ usePersonEmoji.js  # emoji determinista por nombre
       └─ useTheme.js        # tema/color persistente por navegador
 ```
@@ -217,6 +225,27 @@ bocatones/
 - La primera vez se siembra el catálogo con unos clásicos de ejemplo.
 - En el navegador (`localStorage`) solo viven dos cosas personales: el **tema**
   (`bocatones:bg`) y **tu nombre** (`bocatones:me`), para no reescribirlo cada vez.
+
+### Interfaz: las reglas de la casa
+
+- **El color solo vive en el movimiento y en los estados** (`src/assets/base.css`). El
+  esqueleto es monocromo; la paleta *glitch* de 8 colores está reservada a
+  animaciones y a significados concretos: verde pagado, naranja deuda, azul
+  nuevo, magenta destructivo, amarillo esperando.
+- **Todo pasa por tokens**: la tipografía tiene 7 pasos (`--fs-1` … `--fs-7`), el
+  espaciado 6 (`--sp-1` … `--sp-6`), y hay tokens de radio, sombra y z-index. Si
+  necesitas un tamaño que no está, es más probable que sobre el tamaño que que
+  falte el token.
+- **Las sombras y los halos se derivan del tema**, no son absolutos
+  (`--shadow-*`, `--glow-*`, `--sink`). Por eso los 8 presets funcionan, incluido
+  el claro: `useTheme.js` recalcula la paleta y garantiza **4.5:1 de contraste**
+  en todos ellos con un solucionador de contraste, en vez de confiar en
+  coeficientes fijos.
+- **Nada se anima con propiedades que provoquen reflow.** Las barras usan
+  `transform: scaleX()`, no `width`; los barridos usan `translateX`, no
+  `background-position`. Y todo respeta `prefers-reduced-motion`.
+- **Ninguna mutación falla en silencio.** Todas avisan por `useNotices.js`, y
+  borrar un pedido no manda el DELETE hasta que expira el plazo de *deshacer*.
 
 ### Tiempo real, sin sustos
 
@@ -272,5 +301,9 @@ Al conectar, el servidor reenvía el catálogo y los **últimos 7 sorteos** con
 ---
 
 <div align="center">
-<sub>Hecho con pan y código. 🥪</sub>
+
+<img src="public/rm-technology-128.png" width="56" height="56" alt="Logotipo de RM Technology" />
+
+<sub>Hecho con pan y código por <b>RM Technology</b>. 🥪</sub>
+
 </div>

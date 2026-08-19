@@ -1,6 +1,8 @@
 <script setup>
 import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import { personEmoji } from '../composables/usePersonEmoji.js'
+import { useModal } from '../composables/useModal.js'
+import { useMe } from '../composables/useMe.js'
 
 /*
  * SlotMachine — tragaperras para sortear quién recoge los bocatas.
@@ -26,6 +28,11 @@ const reducedMotion =
   typeof window !== 'undefined' &&
   window.matchMedia &&
   window.matchMedia('(prefers-reduced-motion: reduce)').matches
+
+const { isMe } = useMe()
+
+const cabinet = ref(null)
+useModal(cabinet, () => emit('close'))
 
 const phase = ref('ready') // 'ready' | 'spinning' | 'done'
 const armed = ref(false) // palanca tirada (esperando/girando)
@@ -98,10 +105,6 @@ function pull() {
   if (props.draw) startSpin(props.draw) // por si ya estuviera disponible
 }
 
-function onKey(e) {
-  if (e.key === 'Escape') emit('close')
-}
-
 // cuando llega el resultado tras tirar de la palanca, arranca el giro
 watch(
   () => props.draw,
@@ -111,7 +114,6 @@ watch(
 )
 
 onMounted(() => {
-  window.addEventListener('keydown', onKey)
   if (props.draw) {
     // resto de pantallas (o resultado ya disponible): gira directamente
     startSpin(props.draw)
@@ -130,21 +132,22 @@ watch(inPlay, (list) => {
 
 onBeforeUnmount(() => {
   clearTimeout(finishTimer)
-  window.removeEventListener('keydown', onKey)
 })
 </script>
 
 <template>
   <Teleport to="body">
-    <div
-      class="slot-overlay"
-      role="dialog"
-      aria-modal="true"
-      aria-label="Sorteo de quién recoge los bocatas"
-      @click.self="emit('close')"
-    >
+    <div class="slot-overlay" @click.self="emit('close')">
       <div class="rig">
-        <div class="cabinet" :class="{ won: phase === 'done' }">
+        <div
+          ref="cabinet"
+          class="cabinet"
+          :class="{ won: phase === 'done' }"
+          role="dialog"
+          aria-modal="true"
+          aria-labelledby="slot-title"
+          tabindex="-1"
+        >
           <button class="x" type="button" aria-label="cerrar" @click="emit('close')">✕</button>
 
           <!-- tornillos del chasis -->
@@ -158,7 +161,7 @@ onBeforeUnmount(() => {
             <span class="bulbs" aria-hidden="true">
               <i v-for="n in 8" :key="n" :style="{ '--i': n }" />
             </span>
-            <h3>🍀 ¿QUIÉN RECOGE? 🍀</h3>
+            <h3 id="slot-title"><span aria-hidden="true">🍀</span> ¿QUIÉN RECOGE? <span aria-hidden="true">🍀</span></h3>
             <span class="bulbs" aria-hidden="true">
               <i v-for="n in 8" :key="n" :style="{ '--i': n }" />
             </span>
@@ -217,7 +220,7 @@ onBeforeUnmount(() => {
                       <button
                         type="button"
                         class="odd"
-                        :class="{ away: o.available === false }"
+                        :class="{ away: o.available === false, mine: isMe(o.name) }"
                         :aria-pressed="o.available !== false"
                         :title="o.available === false ? `${o.name} no puede ir hoy — pulsa para volver a incluirle` : `${o.name} entra en el sorteo — pulsa si hoy no puede ir`"
                         @click="emit('toggle', o.name)"
@@ -226,7 +229,7 @@ onBeforeUnmount(() => {
                         <span v-if="o.available === false" class="odd-away">no puede</span>
                         <template v-else>
                           <span class="odd-bar" aria-hidden="true">
-                            <span class="odd-fill" :style="{ width: o.chance * 100 + '%' }" />
+                            <span class="odd-fill" :style="{ '--fill': o.chance }" />
                           </span>
                           <span class="odd-pct">{{ Math.round(o.chance * 100) }}%</span>
                         </template>
@@ -266,7 +269,7 @@ onBeforeUnmount(() => {
 .slot-overlay {
   position: fixed;
   inset: 0;
-  z-index: 2000;
+  z-index: var(--z-modal);
   display: grid;
   place-items: center;
   padding: 1rem;
@@ -276,24 +279,42 @@ onBeforeUnmount(() => {
 }
 @keyframes fade { from { opacity: 0; } }
 
-/* paleta derivada del TEMA (color solo en movimiento: luces + victoria) */
+/* paleta derivada del TEMA (color solo en movimiento: luces + victoria)
+ *
+ * Cada variable se declara DOS VECES a propósito. Una custom property con un
+ * valor que no parsea no cae al valor anterior de la cascada: se resuelve a
+ * `unset` allí donde se use, y en cadena. Sin este fallback, un navegador sin
+ * color-mix (iOS 15, WebView viejo) no degradaba la tragaperras: la hacía
+ * desaparecer, porque se iban de golpe los fondos de la cabina, la consola,
+ * los rodillos, la bandeja y la palanca.
+ *
+ * Los valores planos usan `--sink`, que useTheme.js orienta hacia el negro en
+ * los temas oscuros y hacia el blanco en los claros.
+ */
 .rig {
+  --metal-hi: var(--panel);
   --metal-hi: color-mix(in srgb, var(--ink) 13%, var(--panel));
   --metal: var(--panel);
   --metal-lo: var(--bg);
-  --deep: color-mix(in srgb, var(--bg), #000 45%);
-  --window: color-mix(in srgb, var(--bg), #000 30%);
-  --reelbox: color-mix(in srgb, var(--bg), #000 58%);
+  --deep: var(--bg);
+  --deep: color-mix(in srgb, var(--bg), var(--sink) 45%);
+  --window: var(--bg);
+  --window: color-mix(in srgb, var(--bg), var(--sink) 30%);
+  --reelbox: var(--bg);
+  --reelbox: color-mix(in srgb, var(--bg), var(--sink) 58%);
   --edge: var(--line-2);
+  --chrome-hi: var(--ink);
   --chrome-hi: color-mix(in srgb, var(--ink) 85%, var(--panel));
+  --chrome-mid: var(--ink-dim);
   --chrome-mid: color-mix(in srgb, var(--ink) 45%, var(--panel));
 
   display: flex;
   align-items: center;
-  gap: 8px;
+  gap: var(--sp-2);
 }
 
 /* ---- cabina: metal con textura cepillada, en tonos del tema ---- */
+.cabinet:focus { outline: none; }
 .cabinet {
   position: relative;
   width: min(92vw, 560px);
@@ -321,7 +342,7 @@ onBeforeUnmount(() => {
   right: -12px;
   z-index: 20;
   font-family: var(--mono);
-  font-size: 0.95rem;
+  font-size: var(--fs-3);
   color: var(--ink);
   background: radial-gradient(circle at 35% 30%, var(--metal-hi), var(--metal-lo));
   border: 1px solid var(--edge);
@@ -329,8 +350,8 @@ onBeforeUnmount(() => {
   width: 2.1rem;
   height: 2.1rem;
   cursor: pointer;
-  box-shadow: 0 4px 10px -2px #000, inset 0 1px 1px color-mix(in srgb, var(--ink) 18%, transparent);
-  transition: all 0.15s;
+  box-shadow: var(--shadow-sm), inset 0 1px 1px var(--glow-soft);
+  transition: color 0.15s, border-color 0.15s, transform 0.15s;
 }
 .x:hover { color: var(--ink); border-color: var(--ink-dim); transform: rotate(90deg); }
 
@@ -366,7 +387,7 @@ onBeforeUnmount(() => {
 }
 .topper h3 {
   font-family: var(--crt);
-  font-size: 1.6rem;
+  font-size: var(--fs-5);
   letter-spacing: 0.05em;
   white-space: nowrap;
   color: var(--ink);
@@ -380,6 +401,7 @@ onBeforeUnmount(() => {
 }
 /* bombilla: apagada = tenue del tema; encendida = brillo de tinta. Barrido limpio. */
 .bulbs i {
+  will-change: background, box-shadow;
   width: 10px;
   height: 10px;
   border-radius: 50%;
@@ -401,6 +423,7 @@ onBeforeUnmount(() => {
 }
 /* al ganar: parpadeo multicolor (color SOLO en movimiento, como la web) */
 .cabinet.won .bulbs i {
+  will-change: background, box-shadow;
   animation: party 0.45s steps(1, end) infinite;
   animation-delay: calc(var(--i) * 0.05s);
 }
@@ -450,7 +473,7 @@ onBeforeUnmount(() => {
 .reels {
   position: relative;
   display: grid;
-  grid-template-columns: repeat(3, 1fr);
+  grid-template-columns: repeat(3, minmax(0, 1fr));
   gap: 5px;
   padding: 5px;
   border-radius: 7px;
@@ -484,12 +507,17 @@ onBeforeUnmount(() => {
   justify-content: center;
   gap: 0.12rem;
 }
-.cell-emoji { font-size: 1.9rem; line-height: 1; filter: drop-shadow(0 2px 3px rgba(0, 0, 0, 0.6)); }
+.cell-emoji { font-size: var(--fs-6); line-height: 1; filter: drop-shadow(0 2px 3px rgba(0, 0, 0, 0.6)); }
 .cell-name {
-  font-size: 0.68rem;
+  font-size: var(--fs-1);
   font-weight: 600;
   letter-spacing: 0.02em;
-  color: var(--ink-dim); /* legible incluso girando */
+  /* la tinta del tema al 72% en vez de --ink-dim: los rodillos son una
+     superficie hundida, no --panel, así que el color atenuado del tema se
+     quedaba corto de contraste (1.1:1 en el tema claro, 3.1:1 tras el arreglo
+     de la paleta). Con la tinta atenuada por opacidad sube en los dos temas. */
+  color: var(--ink);
+  opacity: 0.72;
   max-width: 100%;
   padding: 0 0.2rem;
   overflow: hidden;
@@ -530,7 +558,7 @@ onBeforeUnmount(() => {
   box-shadow: 0 0 22px -2px var(--g5), inset 0 0 20px -4px var(--g5);
 }
 /* al ganar, el nombre de la fila central resalta */
-.cabinet.won .cell-name { color: var(--ink); text-shadow: 0 0 8px color-mix(in srgb, var(--ink) 50%, transparent); }
+.cabinet.won .cell-name { opacity: 1; text-shadow: 0 0 8px var(--glow-hard); }
 
 /* ---- palanca externa (botón accionable) ---- */
 .lever {
@@ -644,17 +672,19 @@ onBeforeUnmount(() => {
   grid-template-columns: minmax(0, 1fr) 52px 2.4rem 3.6rem;
   align-items: center;
   gap: 0.45rem;
-  font-size: 0.7rem;
+  font-size: var(--fs-1);
   color: var(--ink-dim);
   text-align: left;
   background: transparent;
   border: 1px solid transparent;
   border-radius: 999px;
+  min-height: var(--tap);
   padding: 0.14rem 0.4rem;
   cursor: pointer;
   transition: background 0.15s, border-color 0.15s, opacity 0.15s;
 }
 .odd:hover { border-color: var(--line-2); background: var(--bg-soft); }
+.odd.mine .odd-name { font-weight: 700; text-decoration: underline; text-underline-offset: 3px; }
 
 /* quien hoy no puede ir: tachado, sin barra y sin porcentaje */
 .odd.away { opacity: 0.5; }
@@ -662,13 +692,13 @@ onBeforeUnmount(() => {
 .odd-away {
   grid-column: 2 / 4;
   text-align: center;
-  font-size: 0.62rem;
+  font-size: var(--fs-1);
   letter-spacing: 0.04em;
   color: var(--g6);
   white-space: nowrap;
 }
 .odds-hint {
-  font-size: 0.62rem;
+  font-size: var(--fs-1);
   color: var(--ink-faint);
   letter-spacing: 0.04em;
 }
@@ -681,9 +711,24 @@ onBeforeUnmount(() => {
   color: var(--ink);
 }
 .odd-bar { height: 5px; background: var(--line); border-radius: 999px; overflow: hidden; }
-.odd-fill { display: block; height: 100%; background: var(--ink); border-radius: 999px; }
+.odd-fill {
+  display: block;
+  width: 100%;
+  height: 100%;
+  background: var(--ink);
+  border-radius: var(--radius-pill);
+  transform: scaleX(var(--fill, 0));
+  transform-origin: left;
+  transition: transform 0.4s cubic-bezier(0.2, 0.8, 0.2, 1);
+}
 .odd-pct { text-align: right; font-variant-numeric: tabular-nums; color: var(--ink); }
-.odd-gone { text-align: right; font-size: 0.64rem; color: var(--ink-faint); white-space: nowrap; }
+.odd-gone { text-align: right; font-size: var(--fs-1); color: var(--ink-faint); white-space: nowrap; }
+
+/* 16 bombillas repintando en bucle: se paran si la pestaña no está visible y
+   con reduced-motion, que aquí importa por fotosensibilidad además de por gusto */
+@media (prefers-reduced-motion: reduce) {
+  .bulbs i { animation: none !important; background: var(--metal-hi) !important; box-shadow: none !important; }
+}
 
 @media (max-width: 520px) {
   .odd { grid-template-columns: minmax(0, 1fr) 2.4rem; }
@@ -693,7 +738,7 @@ onBeforeUnmount(() => {
 
 .tray-hint {
   font-family: var(--crt);
-  font-size: 1.2rem;
+  font-size: var(--fs-4);
   letter-spacing: 0.08em;
   color: var(--ink);
   text-shadow: 0 0 10px color-mix(in srgb, var(--ink) 40%, transparent);
@@ -718,14 +763,14 @@ onBeforeUnmount(() => {
 @keyframes pop-emoji { from { transform: scale(0.3) rotate(-20deg); opacity: 0; } }
 .result-text { text-align: left; min-width: 0; }
 .result-lbl {
-  font-size: 0.72rem;
+  font-size: var(--fs-2);
   letter-spacing: 0.08em;
   text-transform: uppercase;
   color: var(--ink-faint);
 }
 .result-name {
   font-family: var(--crt);
-  font-size: 2.1rem;
+  font-size: var(--fs-6);
   line-height: 1;
   color: var(--ink);
   text-shadow: 0 0 16px color-mix(in srgb, var(--g5) 60%, transparent);
@@ -737,13 +782,13 @@ onBeforeUnmount(() => {
 }
 .again, .ok {
   font-family: var(--mono);
-  font-size: 0.76rem;
+  font-size: var(--fs-2);
   font-weight: 700;
   letter-spacing: 0.03em;
   border-radius: var(--radius);
   padding: 0.45rem 0.95rem;
   cursor: pointer;
-  transition: all 0.15s;
+  transition: color 0.15s, background 0.15s, border-color 0.15s;
 }
 .again {
   color: var(--ink-dim);
@@ -765,6 +810,6 @@ onBeforeUnmount(() => {
 @media (max-width: 520px) {
   .lever { width: 34px; flex-basis: 34px; height: 200px; }
   .lever-ball { width: 28px; height: 28px; }
-  .topper h3 { font-size: 1.25rem; }
+  .topper h3 { font-size: var(--fs-4); }
 }
 </style>

@@ -3,6 +3,33 @@
    Black & white CRT hacker aesthetic. Color only lives in motion.
    ============================================================ */
 
+/* ----------------------------------------------------------------
+   Tipografía autoalojada (public/fonts/). JetBrains Mono es variable:
+   un único fichero cubre todo el rango de pesos, así que ahora están
+   disponibles el 500 y el 600 que antes no se cargaban.
+   ---------------------------------------------------------------- */
+@font-face {
+  font-family: 'JetBrains Mono';
+  font-style: normal;
+  font-weight: 100 800;
+  font-display: swap;
+  src: url('/fonts/jetbrains-mono.woff2') format('woff2');
+}
+@font-face {
+  font-family: 'JetBrains Mono';
+  font-style: italic;
+  font-weight: 100 800;
+  font-display: swap;
+  src: url('/fonts/jetbrains-mono-italic.woff2') format('woff2');
+}
+@font-face {
+  font-family: 'VT323';
+  font-style: normal;
+  font-weight: 400;
+  font-display: swap;
+  src: url('/fonts/vt323.woff2') format('woff2');
+}
+
 :root {
   /* mono palette */
   --bg:        #050505;
@@ -27,8 +54,68 @@
   --mono: 'JetBrains Mono', ui-monospace, 'SF Mono', Menlo, monospace;
   --crt:  'VT323', var(--mono);
 
+  /* ----------------------------------------------------------------
+     Escala tipográfica. Había 35 tamaños distintos, con 19 pasos
+     apelotonados entre 0.58 y 0.90rem (diferencias de 0.01rem que
+     nadie percibe). Estos son los 7 que hacen falta.
+     ---------------------------------------------------------------- */
+  --fs-1: 0.7rem;    /* etiquetas //, hints, unidades           */
+  --fs-2: 0.8rem;    /* texto secundario, filas de datos        */
+  --fs-3: 0.95rem;   /* cuerpo, inputs                          */
+  --fs-4: 1.15rem;   /* subtítulos                              */
+  --fs-5: 1.6rem;    /* display pequeño (--crt)                 */
+  --fs-6: clamp(1.6rem, 4vw, 2.2rem);  /* display medio         */
+  --fs-7: clamp(2.4rem, 7vw, 4.2rem);  /* display grande        */
+
+  /* espaciado: una escala de 6, no 57 valores sueltos */
+  --sp-1: 0.3rem;
+  --sp-2: 0.55rem;
+  --sp-3: 0.9rem;
+  --sp-4: 1.3rem;
+  --sp-5: 2rem;
+  --sp-6: 3rem;
+
   --radius: 2px;
+  --radius-lg: 10px;
+  --radius-pill: 999px;
   --maxw: 1080px;
+
+  /* área mínima de un objetivo táctil (WCAG 2.5.8) */
+  --tap: 1.6rem;
+
+  /* ----------------------------------------------------------------
+     Sombras y luces derivadas del tema, no absolutas. Antes eran 24
+     rgba(0,0,0,X) con 9 alfas distintos y 8 glows blancos fijos, que
+     en el tema claro quedaban invertidos o invisibles.
+     ---------------------------------------------------------------- */
+  --shade: 0, 0, 0;              /* se invierte en los temas claros */
+  --shadow-sm: 0 2px 8px -4px rgba(var(--shade), 0.6);
+  --shadow-md: 0 14px 36px -22px rgba(var(--shade), 0.75);
+  --shadow-lg: 0 22px 52px -26px rgba(var(--shade), 0.85);
+  --hairline: 0 0 0 1px rgba(var(--shade), 0.55);
+  --scrim: rgba(var(--shade), 0.76);
+  /* el halo de "algo brilla": sigue a la tinta, así funciona en claro y oscuro.
+     Declarado dos veces a propósito: quien no entienda color-mix se queda con
+     el valor plano de arriba en vez de perder la propiedad entera. */
+  --glow-soft: rgba(242, 242, 242, 0.18);
+  --glow-hard: rgba(242, 242, 242, 0.42);
+  --glow-soft: color-mix(in srgb, var(--ink) 18%, transparent);
+  --glow-hard: color-mix(in srgb, var(--ink) 42%, transparent);
+
+  /* hacia dónde se hunde una superficie: negro en oscuro, blanco en claro
+     (useTheme.js lo reorienta según el tema elegido) */
+  --sink: #000000;
+  /* efecto CRT: el tinte y la mezcla también dependen del tema */
+  --crt-tint: rgba(255, 255, 255, 0.025);
+  --crt-blend: overlay;
+
+  /* z-index con nombre, en vez de 1 / 2 / 6 / 20 / 1000 / 1100 / 2000 / 9999 */
+  --z-base: 1;
+  --z-raised: 2;
+  --z-notice: 900;
+  --z-toast: 1000;
+  --z-modal: 1200;
+  --z-crt: 9999;
 }
 
 *,
@@ -80,16 +167,16 @@ body::after {
   content: '';
   position: fixed;
   inset: 0;
-  z-index: 9999;
+  z-index: var(--z-crt);
   pointer-events: none;
   background: repeating-linear-gradient(
     to bottom,
-    rgba(255, 255, 255, 0.025) 0px,
-    rgba(255, 255, 255, 0.025) 1px,
+    var(--crt-tint) 0px,
+    var(--crt-tint) 1px,
     transparent 1px,
     transparent 3px
   );
-  mix-blend-mode: overlay;
+  mix-blend-mode: var(--crt-blend);
   animation: flicker 7s infinite steps(60);
 }
 
@@ -106,11 +193,46 @@ body::after {
   *::after {
     animation-duration: 0.001ms !important;
     animation-iteration-count: 1 !important;
+    /* el retardo también: la entrada en cascada usa animation-delay con
+       fill-mode backwards, así que sin esto las filas se quedarían en su
+       estado inicial (invisibles) durante todo el escalonado */
+    animation-delay: 0ms !important;
     transition-duration: 0.001ms !important;
+    transition-delay: 0ms !important;
+    scroll-behavior: auto !important;
+  }
+  /* el bloque de arriba solo pone las duraciones a cero: el transform final se
+     sigue aplicando, de golpe. Por eso los desplazamientos de hover/active se
+     anulan aquí, que es lo que producía los saltos bruscos. */
+  a:hover, a:active,
+  button:hover, button:active,
+  label:hover,
+  li:hover, .row:hover, .d-row:hover, .pick-card:hover, .sw:hover, .x:hover {
+    transform: none !important;
   }
 }
 
 ::selection {
   background: var(--ink);
   color: var(--bg);
+}
+/* ----------------------------------------------------------------
+   Utilidades compartidas
+   ---------------------------------------------------------------- */
+
+/* texto que solo leen los lectores de pantalla */
+.sr-only {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  padding: 0;
+  overflow: hidden;
+  clip-path: inset(50%);
+  white-space: nowrap;
+  border: 0;
+}
+
+/* Respuesta física al pulsar. Antes solo la tenía 1 de los 26 botones. */
+button:active:not(:disabled) {
+  transform: translateY(1px);
 }

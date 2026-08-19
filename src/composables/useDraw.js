@@ -1,6 +1,7 @@
 import { ref } from 'vue'
 import { api, todayKey, clientId } from '../api.js'
 import { onMessage } from '../realtime.js'
+import { notifyError } from './useNotices.js'
 
 /*
  * useDraw — sorteo "¿quién recoge los bocatas hoy?" COMPARTIDO.
@@ -76,8 +77,16 @@ export function useDraw() {
   // marcar / desmarcar que alguien no puede ir hoy
   async function toggleAvailable(person) {
     const current = odds.value.find((o) => o.name === person)
-    const res = await api.setUnavailable(todayKey(), person, current ? current.available : true)
-    odds.value = res.candidates
+    const goingAway = current ? current.available : true
+    try {
+      const res = await api.setUnavailable(todayKey(), person, goingAway)
+      odds.value = res.candidates
+    } catch (e) {
+      notifyError(
+        goingAway ? `No se ha podido marcar que ${person} no puede ir` : `No se ha podido volver a incluir a ${person}`,
+        e,
+      )
+    }
   }
 
   // abre la máquina en MI pantalla (aún sin sortear); el resto no la ve todavía
@@ -90,7 +99,12 @@ export function useDraw() {
 
   // tirar de la palanca → el servidor sortea y lo difunde a todos
   async function confirmDraw() {
-    await api.draw(todayKey())
+    try {
+      await api.draw(todayKey())
+    } catch (e) {
+      notifyError('No se ha podido sortear', e)
+      throw e
+    }
   }
 
   function closeDraw() {

@@ -1,6 +1,7 @@
 <script setup>
 import { ref, reactive, nextTick } from 'vue'
 import { fmt, toInput, parse } from '../money.js'
+import { useMe } from '../composables/useMe.js'
 
 defineProps({
   orders: { type: Array, required: true },
@@ -8,6 +9,8 @@ defineProps({
   readonly: { type: Boolean, default: false }, // en el histórico solo se toca el pago
 })
 const emit = defineEmits(['remove', 'update', 'paid'])
+
+const { isMe } = useMe()
 
 const editingId = ref(null)
 const draft = reactive({ person: '', filling: '', bread: '', notes: '', size: 'whole', price: '' })
@@ -48,7 +51,8 @@ function save(id) {
         v-for="(o, i) in orders"
         :key="o.id"
         class="row"
-        :class="{ editing: editingId === o.id, fresh: freshIds.has(o.id) }"
+        :class="{ editing: editingId === o.id, fresh: freshIds.has(o.id), mine: isMe(o.person) }"
+        :style="{ '--i': Math.min(i, 12) }"
       >
         <span v-if="freshIds.has(o.id)" class="new-badge" aria-hidden="true">NUEVO</span>
         <span class="idx">{{ num(i) }}</span>
@@ -58,6 +62,7 @@ function save(id) {
           <div class="body">
             <div class="line-1">
               <span class="person">{{ o.person || 'anónimo' }}</span>
+              <span v-if="isMe(o.person)" class="mine-tag">« tú »</span>
               <span class="arrow">::</span>
               <span class="size-chip" :class="o.size === 'half' ? 'half' : 'whole'">
                 {{ o.size === 'half' ? '½' : '1' }}
@@ -134,9 +139,19 @@ function save(id) {
   gap: 0.55rem;
 }
 
+/*
+ * Entrada escalonada: las filas van apareciendo de arriba abajo en vez de
+ * todas de golpe. El retardo se topa en la 12ª (ver el Math.min del template)
+ * para que una lista larga no tarde una eternidad en pintarse.
+ *
+ * Las filas que llegan por WebSocket llevan .fresh, cuya animación `arrive`
+ * sustituye a esta por especificidad: cada caso tiene su entrada.
+ */
 .row {
   position: relative;
   display: grid;
+  animation: row-in 0.4s cubic-bezier(0.2, 0.8, 0.2, 1) backwards;
+  animation-delay: calc(var(--i, 0) * 45ms);
   grid-template-columns: auto 1fr auto auto;
   align-items: center;
   gap: 0.9rem;
@@ -148,20 +163,30 @@ function save(id) {
   transition: border-color 0.2s, transform 0.2s, background 0.2s;
 }
 
+@keyframes row-in {
+  from { opacity: 0; transform: translateY(-6px); }
+}
+
 /* ---- pedido recién llegado (de otra persona, vía WebSocket) ---- */
 .row.fresh {
   animation: arrive 2.6s cubic-bezier(0.2, 0.8, 0.2, 1);
-  z-index: 1;
+  z-index: var(--z-raised);
 }
 /* barrido de luz que cruza la fila al llegar */
+/* el barrido viaja con transform, no con background-position: antes repintaba
+   la fila completa en cada frame, y ocurre una vez por pedido entrante */
 .row.fresh::after {
   content: '';
   position: absolute;
   inset: 0;
   border-radius: var(--radius);
   pointer-events: none;
-  background: linear-gradient(100deg, transparent 30%, rgba(255, 255, 255, 0.16) 50%, transparent 70%);
-  background-size: 220% 100%;
+  overflow: hidden;
+}
+.row.fresh::after {
+  background: linear-gradient(100deg, transparent 38%, var(--glow-soft) 50%, transparent 62%);
+  background-size: 100% 100%;
+  will-change: transform;
   animation: sweep 0.9s ease-out;
 }
 @keyframes arrive {
@@ -183,15 +208,15 @@ function save(id) {
   }
 }
 @keyframes sweep {
-  from { background-position: 180% 0; }
-  to   { background-position: -80% 0; }
+  from { transform: translateX(-100%); }
+  to   { transform: translateX(100%); }
 }
 
 .new-badge {
   position: absolute;
   top: -8px;
   left: 30px;
-  font-size: 0.58rem;
+  font-size: var(--fs-1);
   font-weight: 700;
   letter-spacing: 0.12em;
   color: var(--bg);
@@ -225,7 +250,7 @@ function save(id) {
 
 .idx {
   font-family: var(--crt);
-  font-size: 1.6rem;
+  font-size: var(--fs-5);
   line-height: 1;
   color: var(--ink-faint);
   font-variant-numeric: tabular-nums;
@@ -241,6 +266,15 @@ function save(id) {
   flex-wrap: wrap;
 }
 .person { font-weight: 700; color: var(--ink); }
+
+/* tu propio pedido, en una lista compartida */
+.row.mine { border-left-color: var(--ink); background: var(--panel); }
+.mine-tag {
+  font-size: var(--fs-1);
+  letter-spacing: 0.06em;
+  color: var(--ink-dim);
+  white-space: nowrap;
+}
 .arrow { color: var(--ink-faint); }
 .filling { color: var(--ink); word-break: break-word; }
 
@@ -252,7 +286,7 @@ function save(id) {
   height: 1.25rem;
   padding: 0 0.35rem;
   border-radius: 999px;
-  font-size: 0.72rem;
+  font-size: var(--fs-2);
   font-weight: 700;
   line-height: 1;
   border: 1px solid var(--line-2);
@@ -265,8 +299,9 @@ function save(id) {
 .e-price { position: relative; display: inline-flex; align-items: center; }
 .e-price input {
   width: 6rem;
+  min-width: 0;
   font-family: var(--mono);
-  font-size: 0.86rem;
+  font-size: var(--fs-3);
   text-align: right;
   font-variant-numeric: tabular-nums;
   color: var(--ink);
@@ -275,8 +310,8 @@ function save(id) {
   border-radius: 999px;
   padding: 0.26rem 1.5rem 0.26rem 0.7rem;
 }
-.e-price input:focus { border-color: var(--ink); outline: none; }
-.e-cur { position: absolute; right: 0.65rem; font-size: 0.75rem; color: var(--ink-faint); pointer-events: none; }
+.e-price input:focus { border-color: var(--ink); }
+.e-cur { position: absolute; right: 0.65rem; font-size: var(--fs-2); color: var(--ink-faint); pointer-events: none; }
 
 .e-seg {
   display: inline-flex;
@@ -288,7 +323,7 @@ function save(id) {
 }
 .e-seg-btn {
   font-family: var(--mono);
-  font-size: 0.78rem;
+  font-size: var(--fs-2);
   color: var(--ink-dim);
   background: transparent;
   border: none;
@@ -305,7 +340,7 @@ function save(id) {
   flex-wrap: wrap;
   gap: 0.4rem 0.7rem;
   margin-top: 0.3rem;
-  font-size: 0.78rem;
+  font-size: var(--fs-2);
 }
 .tag { color: var(--ink-dim); }
 .tag.note { color: var(--ink); }
@@ -319,23 +354,25 @@ function save(id) {
 }
 .amount {
   font-variant-numeric: tabular-nums;
-  font-size: 0.86rem;
+  font-size: var(--fs-3);
   color: var(--ink-dim);
   white-space: nowrap;
 }
 .paid-btn {
   display: inline-flex;
   align-items: center;
+  justify-content: center;
+  min-height: var(--tap);
   gap: 0.4ch;
   font-family: var(--mono);
-  font-size: 0.7rem;
+  font-size: var(--fs-1);
   letter-spacing: 0.04em;
   background: transparent;
   border: 1px solid var(--line-2);
   border-radius: 999px;
   padding: 0.22rem 0.6rem;
   cursor: pointer;
-  transition: all 0.15s;
+  transition: color 0.15s, border-color 0.15s, box-shadow 0.15s;
 }
 .paid-btn.is-due { color: var(--g6); border-color: color-mix(in srgb, var(--g6) 45%, var(--line-2)); }
 .paid-btn.is-due:hover { border-color: var(--g6); box-shadow: 0 0 14px -6px var(--g6); }
@@ -352,12 +389,12 @@ function save(id) {
   background: transparent;
   border: 1px solid transparent;
   color: var(--ink-faint);
-  font-size: 0.85rem;
+  font-size: var(--fs-3);
   width: 2rem;
   height: 2rem;
   border-radius: var(--radius);
   cursor: pointer;
-  transition: all 0.15s;
+  transition: color 0.15s, background 0.15s;
 }
 .act.edit:hover { color: var(--bg); background: var(--g7); }
 .act.del:hover { color: var(--bg); background: var(--ink); }
@@ -366,13 +403,14 @@ function save(id) {
 .edit-form { display: flex; flex-direction: column; gap: 0.7rem; }
 .e-grid {
   display: grid;
-  grid-template-columns: repeat(2, 1fr);
+  grid-template-columns: repeat(2, minmax(0, 1fr));
   gap: 0.5rem;
 }
 @media (max-width: 560px) { .e-grid { grid-template-columns: 1fr; } }
 .e-grid input {
+  min-width: 0; /* mismo motivo que en OrderForm: mínimo intrínseco del input */
   font-family: var(--mono);
-  font-size: 0.9rem;
+  font-size: var(--fs-2);
   color: var(--ink);
   background: var(--bg);
   border: 1px solid var(--line-2);
@@ -380,18 +418,18 @@ function save(id) {
   padding: 0.55rem 0.7rem;
 }
 .e-grid input::placeholder { color: var(--ink-faint); }
-.e-grid input:focus { border-color: var(--ink); outline: none; }
+.e-grid input:focus { border-color: var(--ink); }
 
 .e-actions { display: flex; gap: 0.5rem; }
 .e-btn {
   font-family: var(--mono);
-  font-size: 0.82rem;
+  font-size: var(--fs-2);
   font-weight: 700;
   letter-spacing: 0.04em;
   border-radius: var(--radius);
   padding: 0.45rem 1rem;
   cursor: pointer;
-  transition: all 0.15s;
+  transition: color 0.15s, background 0.15s, border-color 0.15s;
 }
 .e-btn.save {
   color: var(--bg);
@@ -406,9 +444,11 @@ function save(id) {
 }
 .e-btn.cancel:hover { color: var(--ink); border-color: var(--ink); }
 
-/* TransitionGroup */
-.row-enter-active { transition: all 0.32s cubic-bezier(0.2, 0.8, 0.2, 1); }
-.row-leave-active { transition: all 0.28s ease; position: relative; }
+/* TransitionGroup — `all` incluía height/margin/padding, así que cada alta o
+   baja provocaba un reflow de la lista entera; los -from/-to solo usan
+   opacity y transform, con lo que `all` no aportaba nada */
+.row-enter-active { transition: opacity 0.32s, transform 0.32s cubic-bezier(0.2, 0.8, 0.2, 1); }
+.row-leave-active { transition: opacity 0.28s ease, transform 0.28s ease; position: relative; }
 .row-enter-from { opacity: 0; transform: translateX(-14px); border-left-color: var(--g5); }
 .row-leave-to { opacity: 0; transform: translateX(40px); }
 </style>

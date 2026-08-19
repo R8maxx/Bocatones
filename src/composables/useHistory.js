@@ -1,6 +1,7 @@
 import { ref, computed } from 'vue'
 import { api, todayKey } from '../api.js'
 import { onMessage } from '../realtime.js'
+import { notifyError, notifyOk } from './useNotices.js'
 
 /*
  * useHistory — modo histórico: días anteriores, resumen por persona y ranking
@@ -15,7 +16,9 @@ const selectedDay = ref(null)
 const dayDetail = ref(null) // { day, orders, draw, totals }
 const people = ref([]) // [{ name, orders, days, spent, pending, gone }]
 const odds = ref(null) // { day, candidates, total } — papeletas de HOY
-const loading = ref(false)
+const ready = ref(false) // ya se ha cargado al menos una vez (para no mentir en los vacíos)
+const detailLoading = ref(false) // cargando el detalle de un día concreto
+const loading = ref(true) // arranca cargando: ver ready
 const error = ref(null)
 let opened = false
 
@@ -35,6 +38,9 @@ async function loadOdds() {
 }
 
 async function loadDetail(day) {
+  // el detalle se limpia ANTES del await: si no, la fila nueva se despliega
+  // mostrando los pedidos del día anterior mientras llega la respuesta
+  if (selectedDay.value !== day) dayDetail.value = null
   selectedDay.value = day
   dayDetail.value = day ? await api.historyDay(day) : null
 }
@@ -65,6 +71,7 @@ export function useHistory() {
     } finally {
       loading.value = false
     }
+    ready.value = true
     if (first) {
       onMessage((msg) => {
         if (msg.type === 'orders' || msg.type === 'paid' || msg.type === 'draw' || msg.type === '__open') {
@@ -80,33 +87,47 @@ export function useHistory() {
       dayDetail.value = null
       return
     }
-    loading.value = true
+    detailLoading.value = true
     try {
       await loadDetail(day)
       error.value = null
     } catch (e) {
       error.value = e.message
     } finally {
-      loading.value = false
+      detailLoading.value = false
     }
   }
 
   // marcar/desmarcar un pedido concreto desde el histórico
   async function setPaid(id, paid) {
-    await api.updateOrder(id, { paid })
-    await reload()
+    try {
+      await api.updateOrder(id, { paid })
+      await reload()
+    } catch (e) {
+      notifyError('No se ha podido cambiar el estado de pago', e)
+    }
   }
 
   // saldar toda la cuenta de una persona (o solo la de un día)
   async function settle(person, day) {
-    await api.settle(person, day)
-    await reload()
+    try {
+      await api.settle(person, day)
+      notifyOk(`Cuenta de ${person} saldada`)
+      await reload()
+    } catch (e) {
+      notifyError(`No se ha podido saldar la cuenta de ${person}`, e)
+    }
   }
 
   // corregir a mano quién recogió de verdad ese día
   async function setWinner(day, winner) {
-    await api.setDrawWinner(day, winner)
-    await reload()
+    try {
+      await api.setDrawWinner(day, winner)
+      notifyOk(`Corregido: recogió ${winner}`)
+      await reload()
+    } catch (e) {
+      notifyError('No se ha podido corregir quién recogió', e)
+    }
   }
 
   const totals = computed(() =>
@@ -128,6 +149,8 @@ export function useHistory() {
     odds,
     totals,
     loading,
+    detailLoading,
+    ready,
     error,
     load,
     select,

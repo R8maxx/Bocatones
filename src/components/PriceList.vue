@@ -1,6 +1,7 @@
 <script setup>
 import { reactive, ref, watch } from 'vue'
 import { useClassics } from '../composables/useClassics.js'
+import { useModal } from '../composables/useModal.js'
 import { toInput, parse } from '../money.js'
 
 /*
@@ -14,7 +15,10 @@ import { toInput, parse } from '../money.js'
  */
 
 const emit = defineEmits(['close'])
-const { classics, updateClassic } = useClassics()
+const { classics, loading, updateClassic } = useClassics()
+
+const panel = ref(null)
+useModal(panel, () => emit('close'))
 
 // borradores por id: lo que hay escrito en los inputs
 const drafts = reactive({})
@@ -55,25 +59,24 @@ async function save(c, field) {
 // lo que se cobraría por una media si no está definida a mano
 const autoHalf = (c) => (c.priceWhole === null ? '' : toInput(Math.round(c.priceWhole / 2)))
 
-function onKey(e) {
-  if (e.key === 'Escape') emit('close')
-}
 </script>
 
 <template>
   <Teleport to="body">
     <div
       class="pl-overlay"
-      role="dialog"
-      aria-modal="true"
-      aria-label="Precios del catálogo"
-      tabindex="-1"
       @click.self="emit('close')"
-      @keydown="onKey"
     >
-      <div class="pl-panel">
+      <div
+        ref="panel"
+        class="pl-panel"
+        role="dialog"
+        aria-modal="true"
+        aria-labelledby="pl-title"
+        tabindex="-1"
+      >
         <div class="pl-head">
-          <h3><span class="hash">#</span> precios del catálogo</h3>
+          <h3 id="pl-title"><span class="hash">#</span> precios del catálogo</h3>
           <button class="pl-x" type="button" aria-label="cerrar" @click="emit('close')">✕</button>
         </div>
 
@@ -82,9 +85,9 @@ function onKey(e) {
           aplicó, así que cambiar esto <b>no altera el histórico</b>.
         </p>
 
-        <p v-if="failed" class="pl-error">⚠ {{ failed }}</p>
+        <p v-if="failed" class="pl-error" role="alert">⚠ {{ failed }}</p>
 
-        <div class="pl-cols" aria-hidden="true">
+        <div v-if="classics.length" class="pl-cols" aria-hidden="true">
           <span>relleno</span>
           <span>🥖 entero</span>
           <span>½ media</span>
@@ -93,7 +96,7 @@ function onKey(e) {
         <ul class="pl-rows">
           <li v-for="c in classics" :key="c.id" class="pl-row">
             <span class="pl-name">{{ c.name }}</span>
-            <span class="pl-money">
+            <span class="pl-money" :class="{ busy: saving === c.id }">
               <input
                 v-model="drafts[c.id].whole"
                 type="text"
@@ -106,7 +109,7 @@ function onKey(e) {
               />
               <span class="pl-cur" aria-hidden="true">€</span>
             </span>
-            <span class="pl-money">
+            <span class="pl-money" :class="{ busy: saving === c.id }">
               <input
                 v-model="drafts[c.id].half"
                 type="text"
@@ -123,7 +126,8 @@ function onKey(e) {
           </li>
         </ul>
 
-        <p v-if="!classics.length" class="pl-empty">
+        <p v-if="loading && !classics.length" class="pl-empty">cargando catálogo…</p>
+        <p v-else-if="!classics.length" class="pl-empty">
           Todavía no hay clásicos. Guarda alguno desde el formulario de pedido.
         </p>
 
@@ -137,16 +141,17 @@ function onKey(e) {
 .pl-overlay {
   position: fixed;
   inset: 0;
-  z-index: 1100;
+  z-index: var(--z-modal);
   display: grid;
   place-items: center;
   padding: clamp(0.8rem, 3vw, 2rem);
-  background: rgba(0, 0, 0, 0.72);
+  background: var(--scrim);
   backdrop-filter: blur(3px);
   animation: fade 0.2s ease;
 }
 @keyframes fade { from { opacity: 0; } }
 
+.pl-panel:focus { outline: none; }
 .pl-panel {
   width: min(100%, 560px);
   max-height: min(86vh, 720px);
@@ -155,7 +160,7 @@ function onKey(e) {
   border: 1px solid var(--line-2);
   border-radius: var(--radius);
   padding: clamp(1rem, 3vw, 1.6rem);
-  box-shadow: 0 0 0 1px #000, 0 30px 70px -30px #000;
+  box-shadow: var(--hairline), var(--shadow-lg);
   animation: rise 0.24s cubic-bezier(0.2, 0.9, 0.2, 1);
 }
 @keyframes rise { from { opacity: 0; transform: translateY(10px); } }
@@ -169,7 +174,7 @@ function onKey(e) {
   border-bottom: 1px solid var(--line-2);
 }
 .pl-head h3 {
-  font-size: 0.95rem;
+  font-size: var(--fs-3);
   font-weight: 700;
   letter-spacing: 0.04em;
   text-transform: uppercase;
@@ -179,17 +184,17 @@ function onKey(e) {
   background: transparent;
   border: 1px solid transparent;
   color: var(--ink-faint);
-  font-size: 0.85rem;
+  font-size: var(--fs-3);
   width: 2rem;
   height: 2rem;
   border-radius: var(--radius);
   cursor: pointer;
-  transition: all 0.15s;
+  transition: color 0.15s, background 0.15s;
 }
 .pl-x:hover { color: var(--bg); background: var(--ink); }
 
 .pl-note {
-  font-size: 0.76rem;
+  font-size: var(--fs-2);
   line-height: 1.5;
   color: var(--ink-dim);
   margin: 0.9rem 0 1.1rem;
@@ -197,7 +202,7 @@ function onKey(e) {
 .pl-note b { color: var(--ink); font-weight: 700; }
 
 .pl-error {
-  font-size: 0.78rem;
+  font-size: var(--fs-2);
   color: var(--g6);
   border: 1px solid var(--g6);
   border-radius: var(--radius);
@@ -213,7 +218,7 @@ function onKey(e) {
   gap: 0.6rem;
 }
 .pl-cols {
-  font-size: 0.66rem;
+  font-size: var(--fs-1);
   letter-spacing: 0.1em;
   text-transform: uppercase;
   color: var(--ink-faint);
@@ -230,7 +235,7 @@ function onKey(e) {
 }
 .pl-name {
   min-width: 0;
-  font-size: 0.86rem;
+  font-size: var(--fs-3);
   color: var(--ink);
   overflow: hidden;
   text-overflow: ellipsis;
@@ -240,8 +245,9 @@ function onKey(e) {
 .pl-money { position: relative; display: inline-flex; align-items: center; }
 .pl-money input {
   width: 100%;
+  min-width: 0;
   font-family: var(--mono);
-  font-size: 0.86rem;
+  font-size: var(--fs-3);
   text-align: right;
   font-variant-numeric: tabular-nums;
   color: var(--ink);
@@ -252,11 +258,13 @@ function onKey(e) {
   transition: border-color 0.15s;
 }
 .pl-money input::placeholder { color: var(--ink-faint); }
-.pl-money input:focus { border-color: var(--ink); outline: none; }
-.pl-cur { position: absolute; right: 0.65rem; font-size: 0.75rem; color: var(--ink-faint); pointer-events: none; }
+.pl-money input:focus { border-color: var(--ink); }
+/* guardando: se ve que la petición está en vuelo */
+.pl-money.busy input { border-color: var(--ink-dim); opacity: 0.6; }
+.pl-cur { position: absolute; right: 0.65rem; font-size: var(--fs-2); color: var(--ink-faint); pointer-events: none; }
 
 .pl-empty, .pl-hint {
-  font-size: 0.72rem;
+  font-size: var(--fs-2);
   color: var(--ink-faint);
   margin-top: 1rem;
 }
@@ -268,6 +276,7 @@ function onKey(e) {
 }
 
 @media (prefers-reduced-motion: reduce) {
-  .pl-overlay, .pl-panel { animation: none; }
+  .pl-overlay,
+  .pl-panel { animation: none; }
 }
 </style>

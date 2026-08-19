@@ -1,13 +1,14 @@
 <script setup>
 import { computed, onMounted, ref, watch } from 'vue'
 import { useClassics } from '../composables/useClassics.js'
+import { useMe } from '../composables/useMe.js'
 import { api } from '../api.js'
 import { toInput, parse } from '../money.js'
 
 const emit = defineEmits(['add'])
-const { classics, addClassic, removeClassic, priceFor } = useClassics()
+const { classics, loading: classicsLoading, addClassic, removeClassic, priceFor } = useClassics()
 
-const ME_KEY = 'bocatones:me' // tu nombre, recordado para no reescribirlo cada vez
+const { me, setMe } = useMe()
 
 const person = ref('')
 const filling = ref('')
@@ -16,16 +17,14 @@ const notes = ref('')
 const size = ref('whole') // 'whole' = entero | 'half' = media
 const price = ref('') // en euros y como texto ("3,50"); vacío = usa el catálogo
 let priceTouched = false // si lo escribes a mano, dejamos de sobreescribirlo
+const sending = ref(false) // petición en vuelo: evita el doble envío
+const confirmDel = ref(null) // id del clásico esperando confirmación de borrado
 
 // nombres ya usados: evita que la deuda se parta entre "Maria" y "maría"
 const knownPeople = ref([])
 
 onMounted(async () => {
-  try {
-    person.value = localStorage.getItem(ME_KEY) || ''
-  } catch {
-    /* modo privado: se escribe a mano y listo */
-  }
+  person.value = me.value
   try {
     knownPeople.value = await api.listPeople()
   } catch {
@@ -59,22 +58,35 @@ function saveAsClassic() {
   addClassic(filling.value)
 }
 
-function submit() {
-  if (!valid.value) return
+/*
+ * Enviar y ESPERAR. Antes se vaciaba el formulario en el mismo tick que se
+ * emitía el evento: si el POST fallaba, el usuario veía la señal de éxito
+ * (campos en blanco) y el pedido no llegaba nunca. Ahora lo escrito no se
+ * toca hasta que el servidor confirma.
+ */
+async function submit() {
+  if (!valid.value || sending.value) return
   const cents = parse(price.value)
-  emit('add', {
-    person: person.value,
-    filling: filling.value,
-    bread: bread.value,
-    notes: notes.value,
-    size: size.value,
-    // si lo dejas en blanco no mandamos precio: el servidor aplica el del catálogo
-    ...(cents === null ? {} : { price: cents }),
-  })
+  sending.value = true
   try {
-    localStorage.setItem(ME_KEY, person.value.trim())
+    await emitAdd({
+      person: person.value,
+      filling: filling.value,
+      bread: bread.value,
+      notes: notes.value,
+      size: size.value,
+      // si lo dejas en blanco no mandamos precio: el servidor aplica el del catálogo
+      ...(cents === null ? {} : { price: cents }),
+    })
   } catch {
-    /* modo privado */
+    return // el aviso ya lo ha dado el composable; los campos se conservan
+  } finally {
+    sending.value = false
+  }
+
+  setMe(person.value)
+  if (!knownPeople.value.includes(person.value.trim())) {
+    knownPeople.value = [person.value.trim(), ...knownPeople.value]
   }
   // el nombre se queda puesto a propósito: normalmente pides tú otra vez
   filling.value = ''
@@ -83,6 +95,26 @@ function submit() {
   size.value = 'whole'
   price.value = ''
   priceTouched = false
+}
+
+// el padre devuelve la promesa de addOrder, así sabemos si ha ido bien
+function emitAdd(fields) {
+  return new Promise((resolve, reject) => {
+    emit('add', fields, { resolve, reject })
+  })
+}
+
+// borrar un clásico arrastra su precio: se confirma en el propio chip
+function askRemoveClassic(id) {
+  if (confirmDel.value === id) {
+    confirmDel.value = null
+    removeClassic(id).catch(() => {})
+  } else {
+    confirmDel.value = id
+    setTimeout(() => {
+      if (confirmDel.value === id) confirmDel.value = null
+    }, 4000)
+  }
 }
 </script>
 
@@ -162,13 +194,21 @@ function submit() {
       </label>
     </div>
 
-    <div class="quick">
+    <div v-if="classicsLoading || classics.length || canSaveClassic" class="quick">
       <span class="quick-lbl">clásicos:</span>
-      <span v-for="c in classics" :key="c.id" class="chip">
+
+      <span v-if="classicsLoading" class="quick-loading">cargando…</span>
+
+      <span v-for="c in classics" :key="c.id" class="chip" :class="{ arming: confirmDel === c.id }">
         <button type="button" class="chip-pick" @click="pick(c.name)">
           {{ c.name }}<small v-if="c.priceWhole !== null" class="chip-price">{{ toInput(c.priceWhole) }}€</small>
         </button>
-        <button type="button" class="chip-del" :aria-label="`borrar clásico ${c.name}`" @click="removeClassic(c.id)">✕</button>
+        <button
+          type="button"
+          class="chip-del"
+          :aria-label="confirmDel === c.id ? `confirmar borrado de ${c.name}` : `borrar clásico ${c.name}`"
+          @click="askRemoveClassic(c.id)"
+        >{{ confirmDel === c.id ? '¿seguro?' : '✕' }}</button>
       </span>
 
       <button
@@ -179,8 +219,8 @@ function submit() {
       >+ guardar «{{ filling.trim() }}»</button>
     </div>
 
-    <button class="submit" type="submit" :disabled="!valid">
-      <span class="caret">►</span> añadir al pedido
+    <button class="submit" type="submit" :disabled="!valid || sending">
+      <span class="caret">►</span> {{ sending ? 'enviando…' : 'añadir al pedido' }}
     </button>
   </form>
 </template>
@@ -190,17 +230,17 @@ function submit() {
   background: var(--panel);
   border: 1px solid var(--line-2);
   border-radius: var(--radius);
-  padding: clamp(1rem, 2.5vw, 1.6rem);
-  box-shadow: 0 0 0 1px #000, 0 18px 40px -28px #000;
+  padding: clamp(0.9rem, 2vw, 1.25rem);
+  box-shadow: var(--hairline), var(--shadow-md);
 }
 
 .form-head {
   display: flex;
   gap: 0.6ch;
   flex-wrap: wrap;
-  font-size: 0.82rem;
-  margin-bottom: 1.2rem;
-  padding-bottom: 0.9rem;
+  font-size: var(--fs-2);
+  margin-bottom: var(--sp-3);
+  padding-bottom: var(--sp-2);
   border-bottom: 1px dashed var(--line-2);
 }
 .prompt { color: var(--ink-dim); }
@@ -213,8 +253,11 @@ function submit() {
 
 .grid {
   display: grid;
-  grid-template-columns: repeat(2, 1fr);
-  gap: 0.9rem 1.2rem;
+  /* minmax(0, …) y no 1fr: `1fr` deja que el mínimo intrínseco del <input>
+     (~234px por columna) marque el suelo de la pista, y el formulario
+     desbordaba a 861px sin que ninguna media query llegara */
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: var(--sp-2) var(--sp-3);
 }
 @media (max-width: 560px) {
   .grid { grid-template-columns: 1fr; }
@@ -226,35 +269,39 @@ function submit() {
   gap: 0.4rem;
 }
 .lbl {
-  font-size: 0.72rem;
+  font-size: var(--fs-2);
   letter-spacing: 0.06em;
   color: var(--ink-faint);
   text-transform: uppercase;
 }
 
 input {
+  /* imprescindible: un <input> sin `size` tiene un mínimo intrínseco de ~20
+     caracteres (~210px), así que dos columnas 1fr no bajaban de ~439px y el
+     formulario desbordaba justo por encima del breakpoint de .layout (861px),
+     donde ninguna media query llegaba. */
+  min-width: 0;
   font-family: var(--mono);
-  font-size: 0.95rem;
+  font-size: var(--fs-3);
   color: var(--ink);
   background: var(--bg);
   border: 1px solid var(--line-2);
   border-radius: var(--radius);
-  padding: 0.7rem 0.8rem;
+  padding: 0.55rem 0.7rem;
   transition: border-color 0.2s, box-shadow 0.2s;
 }
 input::placeholder { color: var(--ink-faint); }
 input:focus {
   border-color: var(--ink);
   box-shadow: inset 0 0 0 1px var(--ink);
-  outline: none;
 }
 
 .size-row {
   display: flex;
   align-items: center;
   flex-wrap: wrap;
-  gap: 0.7rem 1.1rem;
-  margin-top: 1.1rem;
+  gap: var(--sp-2) var(--sp-3);
+  margin-top: var(--sp-3);
 }
 
 /* precio: input estrecho con el símbolo del euro dentro de la caja */
@@ -267,7 +314,7 @@ input:focus {
 .price-box input {
   width: 6.5rem;
   padding: 0.32rem 1.6rem 0.32rem 0.7rem;
-  font-size: 0.9rem;
+  font-size: var(--fs-3);
   text-align: right;
   font-variant-numeric: tabular-nums;
   border-radius: 999px;
@@ -275,7 +322,7 @@ input:focus {
 .cur {
   position: absolute;
   right: 0.7rem;
-  font-size: 0.8rem;
+  font-size: var(--fs-2);
   color: var(--ink-faint);
   pointer-events: none;
 }
@@ -284,13 +331,13 @@ input:focus {
 /* precio de catálogo dentro del chip del clásico */
 .chip-price {
   margin-left: 0.5ch;
-  font-size: 0.68rem;
+  font-size: var(--fs-1);
   color: var(--ink-faint);
   font-variant-numeric: tabular-nums;
 }
 .chip-pick:hover .chip-price { color: var(--ink-dim); }
 .size-lbl {
-  font-size: 0.72rem;
+  font-size: var(--fs-2);
   color: var(--ink-faint);
   text-transform: uppercase;
   letter-spacing: 0.06em;
@@ -304,7 +351,7 @@ input:focus {
 }
 .seg-btn {
   font-family: var(--mono);
-  font-size: 0.8rem;
+  font-size: var(--fs-2);
   color: var(--ink-dim);
   background: transparent;
   border: none;
@@ -325,10 +372,10 @@ input:focus {
   align-items: center;
   flex-wrap: wrap;
   gap: 0.5rem;
-  margin: 1.1rem 0 1.3rem;
+  margin: var(--sp-3) 0;
 }
 .quick-lbl {
-  font-size: 0.72rem;
+  font-size: var(--fs-2);
   color: var(--ink-faint);
   text-transform: uppercase;
   letter-spacing: 0.06em;
@@ -344,8 +391,11 @@ input:focus {
 }
 .chip:hover { border-color: var(--ink-dim); }
 .chip-pick {
+  display: inline-flex;
+  align-items: center;
+  min-height: var(--tap);
   font-family: var(--mono);
-  font-size: 0.78rem;
+  font-size: var(--fs-2);
   color: var(--ink-dim);
   background: transparent;
   border: none;
@@ -355,7 +405,10 @@ input:focus {
 }
 .chip-pick:hover { color: var(--ink); }
 .chip-del {
-  font-size: 0.6rem;
+  display: inline-flex;
+  align-items: center;
+  min-height: var(--tap);
+  font-size: var(--fs-1);
   color: var(--ink-faint);
   background: transparent;
   border: none;
@@ -365,11 +418,22 @@ input:focus {
 }
 .chip-del:hover { color: var(--g1); }
 
+.quick-loading { font-size: var(--fs-1); color: var(--ink-dim); }
+
+/* clásico esperando confirmación de borrado */
+.chip.arming { border-color: var(--g1); }
+.chip.arming .chip-del {
+  font-size: var(--fs-1);
+  font-weight: 700;
+  color: var(--g1);
+  padding-inline: 0.5rem;
+}
+
 .chip.add {
   border-style: dashed;
   border-color: var(--ink-dim);
   font-family: var(--mono);
-  font-size: 0.78rem;
+  font-size: var(--fs-2);
   color: var(--ink);
   background: transparent;
   padding: 0.28rem 0.7rem;
@@ -381,20 +445,20 @@ input:focus {
   width: 100%;
   font-family: var(--mono);
   font-weight: 700;
-  font-size: 0.95rem;
+  font-size: var(--fs-3);
   letter-spacing: 0.04em;
   text-transform: uppercase;
   color: var(--bg);
   background: var(--ink);
   border: 1px solid var(--ink);
   border-radius: var(--radius);
-  padding: 0.85rem;
+  padding: 0.7rem;
   cursor: pointer;
   transition: transform 0.1s, background 0.2s, color 0.2s, box-shadow 0.2s;
 }
 .submit .caret { display: inline-block; transform: translateY(1px); }
 .submit:hover:not(:disabled) {
-  box-shadow: 0 0 26px -4px rgba(255, 255, 255, 0.45);
+  box-shadow: 0 0 26px -4px var(--glow-hard);
 }
 .submit:active:not(:disabled) { transform: translateY(1px) scale(0.997); }
 .submit:disabled {

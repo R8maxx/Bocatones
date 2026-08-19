@@ -101,7 +101,7 @@ onBeforeUnmount(() => {
   text-align: center;
   cursor: crosshair;
   user-select: none;
-  text-shadow: 0 0 22px rgba(255, 255, 255, 0.12);
+  text-shadow: 0 0 22px var(--glow-soft);
   display: flex;
   justify-content: center;
   flex-wrap: nowrap;

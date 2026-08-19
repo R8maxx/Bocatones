@@ -1,5 +1,5 @@
 <script setup>
-import { computed, ref, watch } from 'vue'
+import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import GlitchTitle from './components/GlitchTitle.vue'
 import OrderForm from './components/OrderForm.vue'
 import OrderList from './components/OrderList.vue'
@@ -7,11 +7,17 @@ import ThemePicker from './components/ThemePicker.vue'
 import SlotMachine from './components/SlotMachine.vue'
 import HistoryPanel from './components/HistoryPanel.vue'
 import PriceList from './components/PriceList.vue'
+import Notices from './components/Notices.vue'
+import MoneyValue from './components/MoneyValue.vue'
 import { useOrders } from './composables/useOrders.js'
 import { useDraw } from './composables/useDraw.js'
 import { personEmoji } from './composables/usePersonEmoji.js'
 import { fmt } from './money.js'
+import { confirmSettle } from './composables/useSettle.js'
+import { useMe } from './composables/useMe.js'
 import { rtStatus } from './realtime.js'
+
+const { isMe } = useMe()
 
 const live = {
   online: { txt: 'EN DIRECTO', cls: 'on' },
@@ -30,18 +36,53 @@ const {
 const { open: slotOpen, round: slotRound, draw, winner, odds, openMachine, confirmDraw, closeDraw, toggleAvailable } =
   useDraw()
 
+/*
+ * Barra compacta. La cabecera se comía el 54% de la primera pantalla y la cola
+ * de pedidos empezaba por debajo del pliegue: no se veía ni una fila al cargar.
+ * Ahora, cuando el centinela del final del hero sale de pantalla, aparece una
+ * barra fina que conserva lo que importa: quién recoge y lo que queda por pagar.
+ *
+ * Se usa IntersectionObserver, no el evento scroll: no hay listener por frame.
+ */
+const sentinel = ref(null)
+const compact = ref(false)
+let io = null
+
+onMounted(() => {
+  if (!('IntersectionObserver' in window) || !sentinel.value) return
+  io = new IntersectionObserver(([e]) => (compact.value = !e.isIntersecting), {
+    threshold: 0,
+    rootMargin: '-8px 0px 0px 0px',
+  })
+  io.observe(sentinel.value)
+})
+onBeforeUnmount(() => io?.disconnect())
+
 // vista actual: el día de hoy o el histórico. Sin router: una sola pantalla.
 const view = ref('today')
 const showPrices = ref(false)
+
+// si llega un sorteo de otra pantalla mientras edito precios, cierro el editor:
+// dos diálogos modales a la vez dejan el foco y el Escape en tierra de nadie
+watch(slotOpen, (open) => {
+  if (open) showPrices.value = false
+})
 
 function toggleView() {
   view.value = view.value === 'today' ? 'history' : 'today'
 }
 
-function askSettle(person, pending) {
-  if (window.confirm(`¿Marcar como pagado todo lo que debe ${person} (${fmt(pending)})?`)) {
-    settle(person)
+// el formulario espera saber si el pedido se ha guardado antes de vaciarse
+async function onAdd(fields, { resolve, reject }) {
+  try {
+    resolve(await addOrder(fields))
+  } catch (e) {
+    reject(e)
   }
+}
+
+function askSettle(person, pending) {
+  if (confirmSettle(person, pending)) settle(person).catch(() => {})
 }
 
 // al tirar de la palanca se pide el sorteo al servidor (y aparece en todas las pantallas)
@@ -173,40 +214,78 @@ function confirmClear() {
 <template>
   <div class="page">
     <header class="hero">
-      <div class="statusbar">
-        <span class="dot" :class="liveState.cls" /> SISTEMA DE PEDIDOS · BAR · v1.0
-        <span class="sep">|</span>
-        <span class="live" :class="liveState.cls"><span class="blink">●</span> {{ liveState.txt }}</span>
+      <!-- una sola fila: estado, navegación y tema. Antes eran tres apiladas. -->
+      <div class="topbar">
+        <div class="statusbar">
+          <span class="dot" :class="liveState.cls" aria-hidden="true" /> BAR · v1.0
+          <span class="sep" aria-hidden="true">|</span>
+          <span class="live" :class="liveState.cls"><span class="blink" aria-hidden="true">●</span> {{ liveState.txt }}</span>
+        </div>
+
+        <nav class="nav" aria-label="Vistas">
+          <button
+            class="nav-btn"
+            type="button"
+            :class="{ on: view === 'history' }"
+            :aria-current="view === 'history' ? 'page' : undefined"
+            @click="toggleView"
+          >
+            {{ view === 'history' ? '← volver a hoy' : '📜 histórico' }}
+          </button>
+          <button class="nav-btn" type="button" @click="showPrices = true">€ precios</button>
+        </nav>
+
+        <ThemePicker />
       </div>
 
       <GlitchTitle text="BOCATONES" />
 
       <p class="tagline">
-        <span class="bk">[</span> pedido del día <span class="bk">]</span>
+        <span class="bk" aria-hidden="true">[</span> pedido del día <span class="bk" aria-hidden="true">]</span>
         &nbsp;·&nbsp; {{ todayLabel }}
       </p>
 
-      <ThemePicker />
-
-      <nav class="nav">
-        <button class="nav-btn" type="button" :class="{ on: view === 'history' }" @click="toggleView">
-          {{ view === 'history' ? '← volver a hoy' : '📜 histórico' }}
-        </button>
-        <button class="nav-btn" type="button" @click="showPrices = true">€ precios</button>
-      </nav>
+      <!-- centinela: marca el final de la cabecera -->
+      <div ref="sentinel" class="sentinel" aria-hidden="true" />
     </header>
 
+    <!--
+      La barra va teleportada a `body`: .page conserva un transform resuelto de
+      su animación de arranque (`boot ... both`), y un ancestro con transform se
+      convierte en el bloque contenedor de sus descendientes `fixed`. Dentro de
+      .page la barra medía 1000px en vez de todo el ancho de la ventana.
+    -->
+    <Teleport to="body">
+      <div class="stickybar" :class="{ show: compact }">
+        <span class="sb-brand">&lt;BOCATONES/&gt;</span>
+        <span v-if="winner" class="sb-who">
+          <span aria-hidden="true">{{ personEmoji(winner.name) }}</span>
+          recoge <b>{{ winner.name }}</b>
+        </span>
+        <span v-if="dayPending" class="sb-due">
+          sin pagar <MoneyValue :cents="dayPending" />
+        </span>
+        <span class="sb-actions">
+          <button class="sb-btn" type="button" @click="toggleView">
+            {{ view === 'history' ? '← hoy' : '📜 histórico' }}
+          </button>
+          <button class="sb-btn" type="button" @click="showPrices = true">€ precios</button>
+        </span>
+      </div>
+    </Teleport>
+
+    <main>
     <template v-if="view === 'today'">
-    <main class="layout">
-      <section class="col-form">
-        <OrderForm @add="addOrder" />
+    <div class="layout">
+      <section class="col-form" aria-label="Nuevo pedido">
+        <OrderForm @add="onAdd" />
       </section>
 
       <aside class="col-stats">
         <button v-if="winner" class="pick-card" type="button" title="Volver a sortear" @click="openMachine">
           <span class="pick-lbl">// hoy recoge</span>
           <span class="pick-who">
-            <span class="pick-emoji">{{ personEmoji(winner.name) }}</span>
+            <span class="pick-emoji" aria-hidden="true">{{ personEmoji(winner.name) }}</span>
             <span class="pick-name">{{ winner.name }}</span>
           </span>
           <span class="pick-hint">🎰 sortear de nuevo</span>
@@ -219,44 +298,50 @@ function confirmClear() {
 
         <!-- dinero: lo de hoy y la deuda que se arrastra de otros días -->
         <div v-if="count || debts.length" class="money-card">
-          <div class="money-head">// la cuenta</div>
+          <h2 class="money-head">// la cuenta</h2>
 
           <div v-if="count" class="money-today">
             <span class="mt-row">
               <span class="mt-lbl">hoy</span>
-              <span class="mt-val">{{ fmt(dayTotal) }}</span>
+              <span class="mt-val"><MoneyValue :cents="dayTotal" /></span>
             </span>
             <span class="mt-row" :class="dayPending ? 'due' : 'ok'">
               <span class="mt-lbl">{{ dayPending ? 'sin pagar' : 'todo pagado' }}</span>
-              <span class="mt-val">{{ dayPending ? fmt(dayPending) : '✓' }}</span>
+              <span class="mt-val">
+                <MoneyValue v-if="dayPending" :cents="dayPending" />
+                <template v-else>✓</template>
+              </span>
             </span>
             <span class="mt-hint">{{ dayPaidCount }}/{{ count }} pedidos pagados</span>
           </div>
 
           <div v-if="debts.length" class="debts">
-            <div class="debts-head">
-              deuda acumulada <span class="debts-total">{{ fmt(debtTotal) }}</span>
-            </div>
+            <h3 class="debts-head">
+              deuda acumulada <span class="debts-total"><MoneyValue :cents="debtTotal" /></span>
+            </h3>
             <ul>
-              <li v-for="d in debts" :key="d.name" class="debt-row">
+              <li v-for="d in debts" :key="d.name" class="debt-row" :class="{ mine: isMe(d.name) }">
                 <span class="debt-who">
-                  <span class="debt-emoji">{{ personEmoji(d.name) }}</span>
+                  <span class="debt-emoji" aria-hidden="true">{{ personEmoji(d.name) }}</span>
                   <span class="debt-name">{{ d.name }}</span>
+                  <span v-if="isMe(d.name)" class="mine-tag">« tú »</span>
                 </span>
                 <button
                   class="debt-amount"
                   type="button"
                   :title="`saldar la cuenta de ${d.name}`"
                   @click="askSettle(d.name, d.pending)"
-                >{{ fmt(d.pending) }}</button>
+                ><MoneyValue :cents="d.pending" /></button>
               </li>
             </ul>
             <p class="debts-hint">// pulsa el importe para saldar</p>
           </div>
+
+          <p v-else-if="count" class="debts-clear">✓ nadie arrastra deuda de otros días</p>
         </div>
 
-        <div v-if="byFilling.length" class="tally">
-          <div class="tally-head">// recuento para el bar</div>
+        <div v-if="byFilling.length" v-reveal class="tally">
+          <h2 class="tally-head">// recuento para el bar</h2>
           <ul>
             <li
               v-for="b in byFilling"
@@ -267,21 +352,21 @@ function confirmClear() {
                 <span class="t-filling">{{ b.filling }}</span>
                 <small v-if="b.bread || b.notes" class="t-extra">{{ extraText(b) }}</small>
               </span>
-              <span class="t-bar">
-                <span class="t-fill" :style="{ width: (b.n / max) * 100 + '%' }" />
+              <span class="t-bar" aria-hidden="true">
+                <span class="t-fill" :style="{ '--fill': b.n / max }" />
               </span>
               <span class="t-n">{{ sizeSummary(b) }}</span>
-              <span class="t-money">{{ b.money ? fmt(b.money) : '' }}</span>
+              <span class="t-money"><MoneyValue v-if="b.money" :cents="b.money" /></span>
             </li>
           </ul>
         </div>
       </aside>
-    </main>
+    </div>
 
-    <section class="orders">
+    <section class="orders" aria-labelledby="orders-title">
       <div class="orders-head">
-        <h2>
-          <span class="hash">#</span> cola de pedidos
+        <h2 id="orders-title">
+          <span class="hash" aria-hidden="true">#</span> cola de pedidos
           <span class="ct">[{{ count }}]</span>
         </h2>
         <div v-if="count" class="head-actions">
@@ -302,7 +387,7 @@ function confirmClear() {
         </div>
       </div>
 
-      <p v-if="error" class="error">⚠ servidor no disponible — reintentando… ({{ error }})</p>
+      <p v-if="error" class="error" role="alert">⚠ servidor no disponible — reintentando… ({{ error }})</p>
 
       <OrderList
         v-if="count"
@@ -318,7 +403,7 @@ function confirmClear() {
       </div>
 
       <div v-else class="empty">
-        <pre class="ascii">  ___________
+        <pre class="ascii" aria-hidden="true">  ___________
  /  BOCATA   \   sin pedidos todavía.
  \___________/   sé el primero en pedir ↑</pre>
         <p>El cursor parpadea. El bar espera. <span class="blink">_</span></p>
@@ -328,11 +413,28 @@ function confirmClear() {
     </template>
 
     <HistoryPanel v-else />
+    </main>
 
     <footer class="foot">
-      <span>// lista del día compartida · guardada en el servidor</span>
-      <span class="sep">·</span>
-      <span>hecho con pan y código</span>
+      <p class="foot-line">
+        <span>// lista del día compartida · guardada en el servidor</span>
+        <span class="sep" aria-hidden="true">·</span>
+        <span>hecho con pan y código</span>
+      </p>
+
+      <p class="credit">
+        <img
+          class="credit-logo"
+          src="/rm-technology-64.png"
+          srcset="/rm-technology-64.png 1x, /rm-technology-128.png 2x"
+          width="24"
+          height="24"
+          alt="Logotipo de RM Technology"
+          loading="lazy"
+          decoding="async"
+        />
+        <span>Deseing by <b>RM Technology</b></span>
+      </p>
     </footer>
 
     <!-- aviso de pedido entrante: un bocata que cae con su bocadillo de cómic -->
@@ -364,6 +466,9 @@ function confirmClear() {
     />
 
     <PriceList v-if="showPrices" @close="showPrices = false" />
+
+    <!-- avisos del sistema: errores, confirmaciones y deshacer -->
+    <Notices />
   </div>
 </template>
 
@@ -371,8 +476,8 @@ function confirmClear() {
 .page {
   display: flex;
   flex-direction: column;
-  gap: clamp(1.6rem, 4vw, 2.8rem);
-  padding-block: clamp(1.2rem, 4vw, 2.5rem);
+  gap: clamp(1.1rem, 2.6vw, 1.9rem);
+  padding-block: clamp(0.8rem, 2vw, 1.4rem);
   animation: boot 0.5s ease both;
 }
 @keyframes boot {
@@ -381,17 +486,90 @@ function confirmClear() {
 
 /* ---- hero ---- */
 .hero { text-align: center; }
+
+/* estado + navegación + tema en una sola línea */
+.topbar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  flex-wrap: wrap;
+  gap: var(--sp-2) var(--sp-3);
+  margin-bottom: var(--sp-3);
+}
+@media (max-width: 720px) {
+  .topbar { justify-content: center; }
+}
+
 .statusbar {
   display: inline-flex;
   align-items: center;
   gap: 0.6ch;
-  font-size: 0.7rem;
-  letter-spacing: 0.14em;
+  font-size: var(--fs-1);
+  letter-spacing: 0.12em;
   color: var(--ink-dim);
   border: 1px solid var(--line-2);
-  border-radius: 999px;
-  padding: 0.3rem 0.9rem;
-  margin-bottom: 1.4rem;
+  border-radius: var(--radius-pill);
+  padding: 0.28rem 0.8rem;
+}
+
+.sentinel { height: 1px; }
+
+/* ---- barra compacta ---- */
+.stickybar {
+  position: fixed;
+  top: 0;
+  left: 0;
+  right: 0;
+  z-index: var(--z-toast);
+  display: flex;
+  align-items: center;
+  gap: var(--sp-3);
+  padding: var(--sp-2) clamp(0.8rem, 3vw, 2rem);
+  font-size: var(--fs-2);
+  color: var(--ink-dim);
+  background: var(--panel);
+  border-bottom: 1px solid var(--line-2);
+  box-shadow: var(--shadow-md);
+  transform: translateY(-100%);
+  opacity: 0;
+  pointer-events: none;
+  transition: transform 0.28s cubic-bezier(0.2, 0.9, 0.2, 1), opacity 0.28s;
+}
+.stickybar.show {
+  transform: translateY(0);
+  opacity: 1;
+  pointer-events: auto;
+}
+.sb-brand {
+  font-family: var(--crt);
+  font-size: var(--fs-4);
+  line-height: 1;
+  color: var(--ink);
+  white-space: nowrap;
+}
+.sb-who, .sb-due { display: inline-flex; align-items: center; gap: 0.5ch; white-space: nowrap; }
+.sb-who b { color: var(--ink); }
+.sb-due { color: var(--g6); font-weight: 700; }
+.sb-actions { margin-left: auto; display: flex; gap: var(--sp-1); }
+.sb-btn {
+  font-family: var(--mono);
+  font-size: var(--fs-1);
+  letter-spacing: 0.04em;
+  color: var(--ink-dim);
+  background: transparent;
+  border: 1px solid var(--line-2);
+  border-radius: var(--radius-pill);
+  padding: 0.3rem 0.75rem;
+  min-height: var(--tap);
+  cursor: pointer;
+  white-space: nowrap;
+  transition: color 0.15s, border-color 0.15s;
+}
+.sb-btn:hover { color: var(--ink); border-color: var(--ink-dim); }
+
+@media (max-width: 620px) {
+  .sb-who, .sb-due { font-size: var(--fs-1); }
+  .sb-brand { display: none; }
 }
 .statusbar .sep { color: var(--ink-faint); }
 .dot {
@@ -413,7 +591,7 @@ function confirmClear() {
 @keyframes blink { 50% { opacity: 0.15; } }
 
 .tagline {
-  margin-top: 1.1rem;
+  margin-top: var(--sp-2);
   font-size: clamp(0.78rem, 2vw, 0.95rem);
   letter-spacing: 0.08em;
   color: var(--ink-dim);
@@ -430,7 +608,7 @@ function confirmClear() {
 }
 .nav-btn {
   font-family: var(--mono);
-  font-size: 0.76rem;
+  font-size: var(--fs-2);
   letter-spacing: 0.04em;
   color: var(--ink-dim);
   background: transparent;
@@ -438,7 +616,7 @@ function confirmClear() {
   border-radius: 999px;
   padding: 0.34rem 0.9rem;
   cursor: pointer;
-  transition: all 0.15s;
+  transition: color 0.15s, border-color 0.15s, background 0.15s;
 }
 .nav-btn:hover { color: var(--ink); border-color: var(--ink-dim); }
 .nav-btn.on {
@@ -451,7 +629,7 @@ function confirmClear() {
 /* ---- layout ---- */
 .layout {
   display: grid;
-  grid-template-columns: 1fr 320px;
+  grid-template-columns: minmax(0, 1fr) 320px;
   gap: 1.3rem;
   align-items: start;
 }
@@ -474,14 +652,14 @@ function confirmClear() {
   border-radius: var(--radius);
   padding: 1rem 1.2rem;
   background:
-    radial-gradient(120% 120% at 0% 0%, rgba(47, 143, 62, 0.14), transparent 60%),
+    radial-gradient(120% 120% at 0% 0%, color-mix(in srgb, var(--g5) 14%, transparent), transparent 60%),
     var(--panel);
   box-shadow: 0 0 22px -8px var(--g5);
   transition: box-shadow 0.18s, transform 0.18s;
 }
 .pick-card:hover { box-shadow: 0 0 26px -4px var(--g5); transform: translateY(-1px); }
 .pick-lbl {
-  font-size: 0.72rem;
+  font-size: var(--fs-2);
   letter-spacing: 0.08em;
   text-transform: uppercase;
   color: var(--ink-faint);
@@ -490,32 +668,32 @@ function confirmClear() {
 .pick-emoji { font-size: 2rem; line-height: 1; flex-shrink: 0; }
 .pick-name {
   font-family: var(--crt);
-  font-size: 1.9rem;
+  font-size: var(--fs-6);
   line-height: 1;
   color: var(--ink);
-  text-shadow: 0 0 14px rgba(255, 255, 255, 0.22);
+  text-shadow: 0 0 14px var(--glow-soft);
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
 }
-.pick-hint { font-size: 0.7rem; color: var(--ink-dim); letter-spacing: 0.04em; }
+.pick-hint { font-size: var(--fs-1); color: var(--ink-dim); letter-spacing: 0.04em; }
 .stat-card {
   border: 1px solid var(--line-2);
   border-radius: var(--radius);
-  padding: 1.2rem 1.3rem;
+  padding: var(--sp-3) var(--sp-4);
   background:
-    radial-gradient(120% 120% at 100% 0%, rgba(255,255,255,0.04), transparent 60%),
+    radial-gradient(120% 120% at 100% 0%, var(--glow-soft), transparent 60%),
     var(--panel);
 }
 .stat-num {
   font-family: var(--crt);
-  font-size: 4.2rem;
+  font-size: var(--fs-7);
   line-height: 0.85;
   font-variant-numeric: tabular-nums;
-  text-shadow: 0 0 20px rgba(255,255,255,0.18);
+  text-shadow: 0 0 20px var(--glow-soft);
 }
 .stat-lbl {
-  font-size: 0.72rem;
+  font-size: var(--fs-2);
   letter-spacing: 0.1em;
   text-transform: uppercase;
   color: var(--ink-dim);
@@ -530,7 +708,7 @@ function confirmClear() {
   background: var(--panel);
 }
 .money-head {
-  font-size: 0.72rem;
+  font-size: var(--fs-2);
   color: var(--ink-faint);
   text-transform: uppercase;
   letter-spacing: 0.08em;
@@ -542,13 +720,13 @@ function confirmClear() {
   align-items: baseline;
   justify-content: space-between;
   gap: 0.8rem;
-  font-size: 0.84rem;
+  font-size: var(--fs-3);
   color: var(--ink-dim);
 }
 .mt-val { font-variant-numeric: tabular-nums; color: var(--ink); }
 .mt-row.due .mt-lbl, .mt-row.due .mt-val { color: var(--g6); font-weight: 700; }
 .mt-row.ok .mt-lbl, .mt-row.ok .mt-val { color: var(--g5); }
-.mt-hint { font-size: 0.68rem; color: var(--ink-faint); margin-top: 0.15rem; }
+.mt-hint { font-size: var(--fs-1); color: var(--ink-faint); margin-top: 0.15rem; }
 
 .debts { margin-top: 1rem; padding-top: 0.85rem; border-top: 1px dashed var(--line-2); }
 .debts-head {
@@ -556,7 +734,7 @@ function confirmClear() {
   align-items: baseline;
   justify-content: space-between;
   gap: 0.7rem;
-  font-size: 0.7rem;
+  font-size: var(--fs-1);
   text-transform: uppercase;
   letter-spacing: 0.07em;
   color: var(--ink-faint);
@@ -569,19 +747,25 @@ function confirmClear() {
   align-items: center;
   justify-content: space-between;
   gap: 0.6rem;
-  font-size: 0.82rem;
+  font-size: var(--fs-2);
 }
 .debt-who { min-width: 0; display: inline-flex; align-items: center; gap: 0.5ch; }
-.debt-emoji { font-size: 1.05rem; line-height: 1; }
+.debt-emoji { font-size: var(--fs-4); line-height: 1; }
 .debt-name {
   color: var(--ink);
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
 }
+.debt-row.mine .debt-name { font-weight: 700; }
+.mine-tag { font-size: var(--fs-1); color: var(--ink-dim); white-space: nowrap; }
+
 .debt-amount {
+  display: inline-flex;
+  align-items: center;
+  min-height: var(--tap);
   font-family: var(--mono);
-  font-size: 0.78rem;
+  font-size: var(--fs-2);
   font-variant-numeric: tabular-nums;
   color: var(--g6);
   background: transparent;
@@ -590,10 +774,10 @@ function confirmClear() {
   padding: 0.16rem 0.55rem;
   cursor: pointer;
   white-space: nowrap;
-  transition: all 0.15s;
+  transition: color 0.15s, border-color 0.15s, background 0.15s;
 }
 .debt-amount:hover { color: var(--bg); background: var(--g6); border-color: var(--g6); }
-.debts-hint { font-size: 0.66rem; color: var(--ink-faint); margin-top: 0.55rem; }
+.debts-hint { font-size: var(--fs-1); color: var(--ink-faint); margin-top: 0.55rem; }
 
 .tally {
   border: 1px solid var(--line);
@@ -602,7 +786,7 @@ function confirmClear() {
   background: var(--bg-soft);
 }
 .tally-head {
-  font-size: 0.72rem;
+  font-size: var(--fs-2);
   color: var(--ink-faint);
   text-transform: uppercase;
   letter-spacing: 0.08em;
@@ -614,7 +798,7 @@ function confirmClear() {
   grid-template-columns: 1fr 40px auto auto;
   align-items: center;
   gap: 0.55rem;
-  font-size: 0.8rem;
+  font-size: var(--fs-2);
 }
 .t-name { min-width: 0; display: flex; flex-direction: column; gap: 0.1rem; }
 .t-filling {
@@ -624,7 +808,7 @@ function confirmClear() {
   text-overflow: ellipsis;
 }
 .t-extra {
-  font-size: 0.68rem;
+  font-size: var(--fs-1);
   color: var(--ink-faint);
   white-space: nowrap;
   overflow: hidden;
@@ -636,17 +820,28 @@ function confirmClear() {
   border-radius: 999px;
   overflow: hidden;
 }
+/*
+ * scaleX en vez de width: `width` provoca reflow en cada frame, y estas barras
+ * se re-animan TODAS a la vez cada vez que cambia el denominador (o sea, cada
+ * vez que alguien pide). La técnica correcta ya estaba en el proyecto, en el
+ * @keyframes drain del aviso.
+ */
 .t-fill {
   display: block;
+  width: 100%;
   height: 100%;
   background: var(--ink);
-  border-radius: 999px;
-  transition: width 0.4s ease;
+  border-radius: var(--radius-pill);
+  transform: scaleX(0);
+  transform-origin: left;
+  transition: transform 0.45s cubic-bezier(0.2, 0.8, 0.2, 1);
 }
+/* se llena cuando el panel entra en pantalla */
+.tally.is-revealed .t-fill { transform: scaleX(var(--fill, 0)); }
 .t-n { color: var(--ink-dim); font-variant-numeric: tabular-nums; }
 .t-money {
   color: var(--ink-faint);
-  font-size: 0.74rem;
+  font-size: var(--fs-2);
   font-variant-numeric: tabular-nums;
   text-align: right;
   white-space: nowrap;
@@ -659,12 +854,12 @@ function confirmClear() {
   justify-content: space-between;
   flex-wrap: wrap;
   gap: 0.7rem 1rem;
-  margin-bottom: 1.1rem;
-  padding-bottom: 0.7rem;
+  margin-bottom: var(--sp-3);
+  padding-bottom: var(--sp-2);
   border-bottom: 1px solid var(--line-2);
 }
 .orders-head h2 {
-  font-size: 1rem;
+  font-size: var(--fs-3);
   font-weight: 700;
   letter-spacing: 0.04em;
   text-transform: uppercase;
@@ -674,7 +869,7 @@ function confirmClear() {
 .head-actions { display: flex; gap: 0.5rem; flex-wrap: wrap; }
 .draw {
   font-family: var(--mono);
-  font-size: 0.78rem;
+  font-size: var(--fs-2);
   font-weight: 700;
   letter-spacing: 0.03em;
   color: var(--ink);
@@ -683,7 +878,7 @@ function confirmClear() {
   border-radius: var(--radius);
   padding: 0.4rem 0.85rem;
   cursor: pointer;
-  transition: all 0.15s;
+  transition: border-color 0.15s, box-shadow 0.15s, opacity 0.15s;
 }
 .draw:hover:not(:disabled) {
   border-color: var(--g3);
@@ -695,7 +890,7 @@ function confirmClear() {
   align-items: center;
   gap: 0.5ch;
   font-family: var(--mono);
-  font-size: 0.78rem;
+  font-size: var(--fs-2);
   font-weight: 700;
   letter-spacing: 0.03em;
   color: var(--bg);
@@ -704,9 +899,9 @@ function confirmClear() {
   border-radius: var(--radius);
   padding: 0.4rem 0.9rem;
   cursor: pointer;
-  transition: all 0.18s;
+  transition: color 0.18s, background 0.18s, border-color 0.18s, box-shadow 0.18s;
 }
-.copy:hover { box-shadow: 0 0 22px -4px rgba(255, 255, 255, 0.5); }
+.copy:hover { box-shadow: 0 0 22px -4px var(--glow-hard); }
 .copy.done {
   color: var(--g5);
   background: transparent;
@@ -715,14 +910,14 @@ function confirmClear() {
 }
 .clear {
   font-family: var(--mono);
-  font-size: 0.78rem;
+  font-size: var(--fs-2);
   color: var(--ink-dim);
   background: transparent;
   border: 1px solid var(--line-2);
   border-radius: var(--radius);
   padding: 0.4rem 0.8rem;
   cursor: pointer;
-  transition: all 0.15s;
+  transition: color 0.15s, border-color 0.15s;
 }
 .clear:hover {
   color: var(--g1);
@@ -731,7 +926,7 @@ function confirmClear() {
 
 /* ---- error ---- */
 .error {
-  font-size: 0.8rem;
+  font-size: var(--fs-2);
   color: var(--g6);
   border: 1px solid var(--g6);
   border-radius: var(--radius);
@@ -749,34 +944,68 @@ function confirmClear() {
 .ascii {
   display: inline-block;
   font-family: var(--mono);
-  font-size: 0.82rem;
+  font-size: var(--fs-2);
   line-height: 1.5;
   color: var(--ink-faint);
   text-align: left;
   margin-bottom: 1rem;
 }
-.empty p { font-size: 0.88rem; }
+.empty p { font-size: var(--fs-3); }
 
 /* ---- footer ---- */
 .foot {
   display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: var(--sp-2);
+  font-size: var(--fs-2);
+  color: var(--ink-faint);
+  letter-spacing: 0.05em;
+  padding-top: var(--sp-3);
+  border-top: 1px dashed var(--line);
+}
+.foot-line {
+  display: flex;
   gap: 0.8ch;
   justify-content: center;
   flex-wrap: wrap;
-  font-size: 0.72rem;
-  color: var(--ink-faint);
-  letter-spacing: 0.05em;
-  padding-top: 1rem;
-  border-top: 1px dashed var(--line);
 }
 .foot .sep { color: var(--line-2); }
+
+/* ---- autoría ---- */
+.credit {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.7ch;
+  font-size: var(--fs-1);
+  letter-spacing: 0.06em;
+  color: var(--ink-dim);
+}
+.credit b {
+  font-weight: 700;
+  color: var(--ink);
+  letter-spacing: 0.04em;
+}
+/* el logotipo trae su propio fondo oscuro redondeado: se respeta tal cual y
+   solo se le da el radio y un borde para que se asiente en cualquier tema */
+.credit-logo {
+  width: 24px;
+  height: 24px;
+  border-radius: 6px;
+  box-shadow: 0 0 0 1px var(--line-2);
+  transition: box-shadow 0.2s, transform 0.2s;
+}
+.credit:hover .credit-logo {
+  box-shadow: 0 0 0 1px var(--g8), 0 0 14px -4px var(--g8);
+  transform: translateY(-1px);
+}
 
 /* ---- aviso: bocata con bocadillo de cómic ---- */
 .toast {
   position: fixed;
   right: clamp(0.8rem, 3vw, 1.6rem);
   top: clamp(0.8rem, 3vw, 1.6rem);
-  z-index: 1000;
+  z-index: var(--z-toast);
   display: flex;
   align-items: center;
   gap: 0.55rem;
@@ -791,7 +1020,7 @@ function confirmClear() {
   line-height: 1;
   flex-shrink: 0;
   transform-origin: 50% 80%;
-  filter: drop-shadow(0 6px 10px rgba(0, 0, 0, 0.55));
+  filter: drop-shadow(0 6px 10px rgba(var(--shade), 0.55));
   animation:
     drop 0.7s cubic-bezier(0.3, 1.4, 0.5, 1),
     swing 1.6s ease-in-out 0.7s infinite;
@@ -843,7 +1072,7 @@ function confirmClear() {
   background: var(--ink);
   color: var(--bg);
   border-radius: 14px;
-  box-shadow: 0 14px 36px -16px #000;
+  box-shadow: var(--shadow-md);
   overflow: hidden;
   animation: pop 0.4s 0.18s cubic-bezier(0.2, 1.5, 0.4, 1) backwards;
 }
@@ -864,13 +1093,13 @@ function confirmClear() {
 
 .bubble-tag {
   font-family: var(--crt);
-  font-size: 1.35rem;
+  font-size: var(--fs-4);
   line-height: 0.95;
   font-weight: 700;
   letter-spacing: 0.02em;
 }
 .bubble-detail {
-  font-size: 0.8rem;
+  font-size: var(--fs-2);
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
