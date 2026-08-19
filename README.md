@@ -27,6 +27,16 @@ con un título *glitch* que imita la terminal.
   se puede ajustar en cada pedido. Un check por pedido marca quién ha pagado, y
   el panel resume la **deuda acumulada** de cada uno sumando todos los días
   pendientes (con un botón para saldar la cuenta de golpe).
+- 💳 **Quién puso el dinero** — la deuda tiene **acreedor**: baja uno al bar, paga
+  los cuarenta euros de todos y luego le devuelven. Por defecto paga **quien
+  recoge**, se corrige a mano, y el panel lo dice con nombre y apellidos:
+  *«debes 3,50 € a Alba»*, *«te debe 4,50 € Marta · ✓ cobrado»*. Los bocatas del
+  que pone el dinero quedan pagados solos (no se debe nada a sí mismo) y, si él
+  los desmarca, no se le vuelven a marcar. Lo que no se sabe a quién devolver se
+  cuenta aparte, no se esconde.
+- 🔁 **Lo de siempre** — tres chips con los bocatas que más repite cada uno,
+  sacados de su propio histórico. Un clic rellena el pedido con el precio del
+  catálogo de hoy.
 - 🎰 **Sorteo de quién recoge** — una tragaperras decide quién baja al bar, y gira
   a la vez en todas las pantallas con el mismo resultado.
 - ⚖️ **Y es un sorteo justo** — no es 100% aleatorio: **quien menos ha ido tiene
@@ -45,11 +55,18 @@ con un título *glitch* que imita la terminal.
   `2x Lomo con queso`, listo para WhatsApp.
 - ✏️ **Editar sobre la marcha** — corrige cualquier pedido en línea si alguien
   se equivoca.
+- ↩️ **Todo se puede deshacer** — tanto una baja como el `rm -rf *` que vacía el
+  día: la cola desaparece al instante y el borrado no sale hacia el servidor
+  hasta que expira el plazo. Los diálogos son de la casa, no del navegador.
 - 🎨 **Tema a tu gusto** — elige el color de fondo (8 presets o color libre); se
   guarda en tu navegador y no afecta a los demás. La paleta se recalcula sola
   para seguir siendo legible.
 - 📅 **Fecha de hoy** — la lista se organiza por día; cada jornada empieza limpia
   y la anterior se queda guardada en el histórico.
+- 📲 **Instalable en el móvil** — es una PWA: icono en la pantalla de inicio,
+  ventana sin barra del navegador y arranque desde la caché. Sin red **abre
+  igual** y lo dice, en vez de mostrar el error del navegador. Necesita HTTPS
+  (ver más abajo).
 
 ---
 
@@ -107,7 +124,7 @@ automático y logs) y configura nginx como proxy inverso (incluido el WebSocket)
 sudo git clone https://github.com/TU_USUARIO/bocatones.git /opt/Bocatones
 
 # 2. edita las variables del principio del script a tu gusto
-#    APP_DIR · APP_PORT · NGINX_PORT · SERVER_IP
+#    APP_DIR · APP_PORT · NGINX_PORT · SERVER_IP · ENABLE_TLS · TLS_PORT
 sudo nano /opt/Bocatones/deploy/install.sh
 
 # 3. ejecútalo como root
@@ -123,6 +140,9 @@ Al terminar tendrás la app en `http://SERVER_IP:NGINX_PORT`.
 | `APP_PORT`   | `3017`           | Puerto interno del servidor Node.        |
 | `NGINX_PORT` | `8080`           | Puerto público que sirve nginx.          |
 | `SERVER_IP`  | —                | IP o dominio del servidor.               |
+| `ENABLE_TLS` | `1`              | Añade el bloque HTTPS (0 = solo HTTP).   |
+| `TLS_PORT`   | `8443`           | Puerto público HTTPS.                    |
+| `CERT_DIR`   | `/etc/nginx/ssl/bocatones` | Dónde vive el certificado.    |
 
 **Gestión del servicio** (PM2):
 
@@ -147,6 +167,30 @@ pm2 restart bocatones
 > Los datos (SQLite) viven en `APP_DIR/server/bocatones.db` y persisten entre
 > reinicios y actualizaciones.
 
+### 📲 Para poder instalarla en el móvil: HTTPS
+
+Una PWA solo se instala (y solo registra su service worker) en **contexto
+seguro**: HTTPS o `localhost`. Una IP por HTTP **no** vale, así que el script
+levanta también un `server` en HTTPS —`https://SERVER_IP:8443`— con un
+certificado autofirmado que genera él mismo (con `subjectAltName` de IP, sin el
+cual los navegadores modernos ni ofrecen la excepción). **El puerto en claro se
+conserva y no se redirige**, para no dejar a nadie fuera de golpe.
+
+> ⚠️ **El certificado autofirmado no basta por sí solo.** Chrome seguirá
+> tratando el origen como inseguro —y por tanto **no** registrará el service
+> worker ni ofrecerá instalar la app— hasta que ese certificado se instale como
+> **CA de confianza en cada dispositivo**:
+>
+> - **Android:** Ajustes → Seguridad → Cifrado y credenciales → Instalar un
+>   certificado → Certificado de CA, y elige el `.crt` copiado del servidor.
+> - **iOS:** abre el `.crt` para instalar el perfil y actívalo en Ajustes →
+>   General → Información → Ajustes de confianza de certificados.
+>
+> Sin ese paso la app funciona igual que siempre por HTTP: simplemente no se
+> instala ni guarda nada en caché. Y si algún día tenéis un nombre de host con
+> certificado de confianza de la empresa, basta apuntar `CERT_FILE`/`KEY_FILE`
+> a ese certificado: el bloque de nginx ya está puesto.
+
 ---
 
 ## 🧰 Scripts
@@ -167,13 +211,18 @@ pm2 restart bocatones
 **Frontend:** Vue 3 (`<script setup>`) + Vite.
 **Backend:** Express + SQLite integrado de Node (`node:sqlite`) — sin dependencias nativas.
 **Tiempo real:** WebSocket (`ws`).
+**PWA:** manifest + service worker escritos a mano, sin workbox ni plugins: los
+assets ya salen del build con hash, así que la estrategia cabe en un fichero.
 
 ```
 bocatones/
-├─ index.html               # carga fuentes y favicon (bocata.jpg)
+├─ index.html               # carga fuentes, favicon y manifest
 ├─ vite.config.js           # proxy de /api y /ws → :3017
 ├─ public/
-│  ├─ bocata.jpg            # favicon
+│  ├─ bocata.jpg            # origen de los iconos
+│  ├─ icon-192.png · icon-512.png · icon-maskable-512.png
+│  ├─ manifest.webmanifest  # nombre, colores e iconos de la PWA
+│  ├─ sw.js                 # service worker: shell en caché, /api nunca
 │  └─ bocatones_hacker.gif  # gif original que inspira el título
 ├─ server/
 │  └─ index.js              # API REST + WebSocket + SQLite
@@ -192,9 +241,12 @@ bocatones/
    │  ├─ PriceList.vue      # editor del catálogo de precios
    │  ├─ MoneyValue.vue     # importe que cuenta hasta su valor nuevo
    │  ├─ Notices.vue        # avisos: errores, confirmaciones y deshacer
+   │  ├─ ConfirmDialog.vue  # el diálogo de la casa (adiós window.confirm)
    │  └─ ThemePicker.vue    # selector de color de fondo
    └─ composables/
-      ├─ useOrders.js       # lista del día + dinero + deuda (REST + WebSocket)
+      ├─ useOrders.js       # lista del día + dinero + deuda con acreedor
+      ├─ usePayer.js        # quién puso el dinero hoy (sigue al sorteo)
+      ├─ useConfirm.js      # preguntas antes de actuar, con foco y Escape
       ├─ useDraw.js         # sorteo compartido y papeletas
       ├─ useHistory.js      # modo histórico (carga perezosa)
       ├─ useClassics.js     # catálogo de clásicos y sus precios
@@ -211,17 +263,25 @@ bocatones/
 ### Datos
 
 - Todo se guarda en **`server/bocatones.db`** (SQLite). Está en `.gitignore`.
-- Tres tablas:
+- Cinco tablas:
   - `classics` — catálogo de rellenos con su precio (`price_whole`, `price_half`).
   - `orders` — pedidos, con `day`, `size` (`whole`/`half`), `price` y `paid`.
   - `draws` — quién recogió cada día (`day` es la clave: resortear reemplaza).
   - `unavailable` — quién no podía ir cada día (clave `day` + `person`).
+  - `payers` — quién puso el dinero cada día. **Solo guarda las correcciones a
+    mano**: si un día no está en esta tabla, paga quien recogió (`draws.winner`),
+    así que el histórico entero ya tiene acreedor sin migrar ni una fila, y
+    borrar la fila es volver a seguir al sorteo.
 - **El dinero va siempre en céntimos** (enteros), nunca en decimales.
+- `orders.paid_auto` distingue quién marcó un pago, en tres estados: `0` a mano,
+  `1` lo marcó solo el pagador del día, `2` su dueño lo **desmarcó** a mano. El
+  `2` es el que garantiza que ni un resorteo ni un cambio de pagador vuelvan a
+  pisar la decisión de una persona.
 - El precio del pedido es una **foto del momento**: cambiar el catálogo no altera
   lo que ya está pedido, así que el histórico no se mueve.
-- Las migraciones son `ALTER TABLE` idempotentes al arrancar: se puede desplegar
-  sobre una base de datos antigua sin tocar nada (los pedidos viejos se quedan a
-  precio 0 y sin pagar).
+- Las migraciones son `CREATE TABLE IF NOT EXISTS` y `ALTER TABLE` idempotentes
+  al arrancar: se puede desplegar sobre una base de datos antigua sin tocar nada
+  (los pedidos viejos se quedan a precio 0 y sin pagar).
 - La primera vez se siembra el catálogo con unos clásicos de ejemplo.
 - En el navegador (`localStorage`) solo viven dos cosas personales: el **tema**
   (`bocatones:bg`) y **tu nombre** (`bocatones:me`), para no reescribirlo cada vez.
@@ -245,7 +305,15 @@ bocatones/
   `transform: scaleX()`, no `width`; los barridos usan `translateX`, no
   `background-position`. Y todo respeta `prefers-reduced-motion`.
 - **Ninguna mutación falla en silencio.** Todas avisan por `useNotices.js`, y
-  borrar un pedido no manda el DELETE hasta que expira el plazo de *deshacer*.
+  ni borrar un pedido ni vaciar el día mandan el DELETE hasta que expira el plazo
+  de *deshacer* (5 s para una baja, 8 s para el día entero).
+- **Ni un diálogo del navegador.** Las preguntas las pinta `ConfirmDialog.vue`
+  con el mismo contrato que los demás modales (`useModal.js`: foco, focus trap,
+  Escape y foco devuelto al botón que lo abrió). Donde había un `window.confirm`
+  hay ahora o un diálogo de la casa o, mejor, un *deshacer*.
+- **Lo automático no pisa a una persona.** El pagador del día marca sus propios
+  bocatas como pagados, pero si él los desmarca no vuelven a marcarse solos
+  (`orders.paid_auto = 2`).
 
 ### Tiempo real, sin sustos
 
@@ -271,18 +339,22 @@ Los importes son **céntimos** (`350` = 3,50 €).
 | `DELETE` | `/api/classics/:id`           | Borra un clásico.                        |
 | `GET`    | `/api/people`                 | Nombres ya usados (para autocompletar).  |
 | `GET`    | `/api/orders?day=YYYY-MM-DD`  | Pedidos de ese día.                      |
+| `GET`    | `/api/orders/usual?person=`   | Lo que más repite esa persona (`limit`, 3 por defecto): `{ filling, bread, notes, size, times }`. Sin precio a propósito: vale el del catálogo de hoy. |
 | `POST`   | `/api/orders`                 | Crea pedido `{ day, person, filling, bread, notes, size, price?, clientId }`. Sin `price` se aplica el del catálogo. |
 | `PUT`    | `/api/orders/:id`             | Edición **parcial**: solo se toca lo que llega (incluye `price` y `paid`). |
 | `DELETE` | `/api/orders/:id`             | Borra un pedido.                         |
 | `DELETE` | `/api/orders?day=YYYY-MM-DD`  | Vacía el día entero.                     |
-| `POST`   | `/api/payments/settle`        | Salda lo que debe alguien: `{ person, day? }`. |
+| `POST`   | `/api/payments/settle`        | Salda lo que debe alguien: `{ person, day?, creditor? }`. Con `creditor` salda **solo** los días que puso ese acreedor. |
+| `GET`    | `/api/debts`                  | Deuda con acreedor (`from`, `to`): `rows` con `kind` (`pair`/`self`/`orphan`/`anon`), `byPerson` (el total de cada deudor) y `totals`. |
+| `GET`    | `/api/payers?day=`            | Quién puso el dinero: `{ payer, source: 'manual'\|'draw'\|null, settled, auto }`. |
+| `PUT`    | `/api/payers`                 | Fija a mano `{ day, person }`. **`person` vacío no es un error**: suelta la corrección y vuelve a pagar quien recoja. |
 | `GET`    | `/api/unavailable?day=`       | Quién no puede ir ese día.                |
 | `PUT`    | `/api/unavailable`            | Marca o desmarca `{ day, person, unavailable }`. |
 | `GET`    | `/api/draw/odds?day=`         | Papeletas y probabilidad de cada candidato (con `available`). |
 | `POST`   | `/api/draw`                   | Sortea `{ day, clientId }` y lo guarda.  |
 | `PUT`    | `/api/draws/:day`             | Corrige a mano quién recogió `{ winner }`. |
-| `GET`    | `/api/history/days`           | Un resumen por día (`from`, `to`, `limit`). |
-| `GET`    | `/api/history/day?day=`       | Detalle: pedidos + quién recogió + totales. |
+| `GET`    | `/api/history/days`           | Un resumen por día (`from`, `to`, `limit`), con `winner` y `payer`. |
+| `GET`    | `/api/history/day?day=`       | Detalle: pedidos + quién recogió + quién pagó + totales. |
 | `GET`    | `/api/history/people`         | Por persona: gasto, deuda y veces que ha ido. |
 
 Mensajes que salen por el WebSocket (`/ws`):
@@ -291,12 +363,15 @@ Mensajes que salen por el WebSocket (`/ws`):
 | ------- | ------ |
 | `{ type: 'orders', day, orders, by }`                | cualquier cambio en los pedidos de un día |
 | `{ type: 'classics', classics }`                     | cambios en el catálogo o al conectar |
-| `{ type: 'draw', day, people, odds, winner, … }`     | al sortear; con `announce: true` si es solo para el banner |
-| `{ type: 'paid', person, days, by }`                 | alguien ha saldado una cuenta |
+| `{ type: 'draw', day, people, odds, winner, payer, … }` | al sortear; con `announce: true` si es solo para el banner. Lleva el pagador dentro: un ganador nuevo es el acreedor nuevo |
+| `{ type: 'paid', person, days, creditor, by }`        | alguien ha saldado una cuenta |
+| `{ type: 'payer', day, payer, source, settled, auto }` | ha cambiado quién puso el dinero ese día |
 | `{ type: 'unavailable', day, people }`               | ha cambiado quién puede ir hoy |
 
 Al conectar, el servidor reenvía el catálogo y los **últimos 7 sorteos** con
-`announce: true` (el cliente se queda con el de su día).
+`announce: true` (el cliente se queda con el de su día), más los **pagadores
+fijados a mano** de esos días (los que salen del sorteo ya viajan dentro del
+propio mensaje `draw`).
 
 ---
 

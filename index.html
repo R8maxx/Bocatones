@@ -12,6 +12,17 @@
     <link rel="icon" href="/favicon.ico" sizes="any" />
     <link rel="apple-touch-icon" href="/apple-touch-icon.png" />
 
+    <!--
+      Instalable en el móvil (ver public/manifest.webmanifest y public/sw.js).
+      El theme_color del manifest solo pinta la pantalla de arranque; la barra
+      del navegador la sigue gobernando el <meta name="theme-color"> de abajo,
+      que el script del tema y useTheme.js actualizan con el color elegido.
+    -->
+    <link rel="manifest" href="/manifest.webmanifest" />
+    <meta name="apple-mobile-web-app-capable" content="yes" />
+    <meta name="apple-mobile-web-app-title" content="Bocatones" />
+    <meta name="apple-mobile-web-app-status-bar-style" content="default" />
+
     <!-- previsualización al pegar el enlace en WhatsApp -->
     <meta property="og:type" content="website" />
     <meta property="og:locale" content="es_ES" />

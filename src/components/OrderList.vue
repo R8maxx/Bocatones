@@ -20,6 +20,14 @@ function num(i) {
   return String(i + 1).padStart(2, '0')
 }
 
+// paidAuto === 1: lo marcó el servidor por ser quien puso el dinero ese día.
+// Conviene decirlo, o parece que el check se ha movido solo sin motivo.
+function paidTitle(o) {
+  if (!o.paid) return 'pendiente — pulsa para marcar como pagado'
+  if (o.paidAuto === 1) return 'pagado: puso el dinero ese día — pulsa para marcarlo como pendiente'
+  return 'pagado — pulsa para marcar como pendiente'
+}
+
 async function startEdit(o) {
   editingId.value = o.id
   draft.person = o.person
@@ -83,11 +91,11 @@ function save(id) {
               type="button"
               :class="o.paid ? 'is-paid' : 'is-due'"
               :aria-pressed="!!o.paid"
-              :title="o.paid ? 'pagado — pulsa para marcar como pendiente' : 'pendiente — pulsa para marcar como pagado'"
+              :title="paidTitle(o)"
               @click="emit('paid', o.id, !o.paid)"
             >
               <span aria-hidden="true">{{ o.paid ? '✓' : '€' }}</span>
-              {{ o.paid ? 'pagado' : 'debe' }}
+              {{ o.paid ? (o.paidAuto === 1 ? 'puso' : 'pagado') : 'debe' }}
             </button>
           </div>
 

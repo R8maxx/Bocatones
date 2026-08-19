@@ -3,6 +3,7 @@ import { api, todayKey, clientId } from '../api.js'
 import { onMessage, startRealtime } from '../realtime.js'
 import { fmt } from '../money.js'
 import { notifyError, notifyOk, notifyUndo } from './useNotices.js'
+import { useMe } from './useMe.js'
 
 /*
  * useOrders — lista del día COMPARTIDA, servida por el backend (SQLite).
@@ -26,20 +27,22 @@ const loading = ref(true)
 const error = ref(null)
 const freshIds = ref(new Set()) // pedidos recién llegados (para destacarlos)
 const arrival = ref(null) // último pedido llegado de otra persona (para el aviso)
-const debts = ref([]) // [{ name, pending, ... }] con pendiente > 0, de todos los días
+const debts = ref([]) // total por persona: [{ name, key, pending, days }]
+const debtRows = ref([]) // pares deudor→acreedor, para «debes a» / «te deben»
 let started = false
 let ready = false // ya hemos cargado al menos una vez
 
 const visible = computed(() => allOrders.value.filter((o) => !hidden.value.has(o.id)))
 
-function hide(id) {
+// las dos aceptan un id o una lista: vaciar el día oculta todas las filas de golpe
+function hide(ids) {
   const s = new Set(hidden.value)
-  s.add(id)
+  for (const id of [].concat(ids)) s.add(id)
   hidden.value = s
 }
-function unhide(id) {
+function unhide(ids) {
   const s = new Set(hidden.value)
-  s.delete(id)
+  for (const id of [].concat(ids)) s.delete(id)
   hidden.value = s
 }
 
@@ -58,15 +61,19 @@ async function refresh() {
   }
 }
 
-// quién debe dinero, sumando todos los días sin pagar.
-// se llama tras cada cambio, así que va agrupado para no encadenar peticiones.
+// quién debe dinero Y A QUIÉN, sumando todos los días sin pagar.
+// Antes salía de /api/history/people, que no sabe quién puso el dinero; ahora
+// de /api/debts, que trae los pares y el total por persona derivado de ellos
+// (así los dos números no pueden discrepar).
+// Se llama tras cada cambio, así que va agrupado para no encadenar peticiones.
 let debtsTimer = null
 function refreshDebts() {
   clearTimeout(debtsTimer)
   debtsTimer = setTimeout(async () => {
     try {
-      const people = await api.historyPeople()
-      debts.value = people.filter((p) => p.pending > 0)
+      const res = await api.debts()
+      debtRows.value = res.rows
+      debts.value = res.byPerson
     } catch {
       /* el panel de deuda simplemente no se muestra */
     }
@@ -130,6 +137,10 @@ function start() {
       // alguien ha saldado una cuenta: puede afectar a días que no estoy mirando
       refreshDebts()
       if (msg.days?.includes(day.value)) refresh()
+    } else if (msg.type === 'draw' || msg.type === 'payer') {
+      // un sorteo nuevo, una corrección del ganador o un cambio de pagador
+      // cambian el ACREEDOR de ese día: la deuda hay que releerla
+      refreshDebts()
     } else if (msg.type === 'orders' && msg.day === day.value) {
       const prevList = allOrders.value
       const prevIds = new Set(prevList.map((o) => o.id))
@@ -157,6 +168,7 @@ function start() {
 export function useOrders() {
   if (typeof window !== 'undefined') start()
 
+  const { isMe } = useMe()
   const count = computed(() => visible.value.length)
 
   // dinero del día: total pedido y lo que queda por cobrar
@@ -166,6 +178,24 @@ export function useOrders() {
   )
   const dayPaidCount = computed(() => visible.value.filter((o) => o.paid).length)
   const debtTotal = computed(() => debts.value.reduce((s, d) => s + d.pending, 0))
+
+  /*
+   * Tu posición en la cuenta. Son computed sobre `me`, así que cambiar tu nombre
+   * en el formulario reordena los paneles al instante sin pedir nada al servidor.
+   */
+  const iOwe = computed(() => debtRows.value.filter((r) => r.kind === 'pair' && isMe(r.debtor)))
+  const owedToMe = computed(() => debtRows.value.filter((r) => r.kind === 'pair' && isMe(r.creditor)))
+  const iOweTotal = computed(() => iOwe.value.reduce((s, r) => s + r.pending, 0))
+  const owedToMeTotal = computed(() => owedToMe.value.reduce((s, r) => s + r.pending, 0))
+  // lo tuyo de un día que pusiste tú: nadie te lo debe, solo falta marcarlo
+  const myUnmarked = computed(() => debtRows.value.filter((r) => r.kind === 'self' && isMe(r.debtor)))
+  // deuda sin acreedor: días sin pagador, no se sabe a quién devolvérselo
+  const orphanTotal = computed(() =>
+    debtRows.value.reduce((s, r) => s + (r.kind === 'orphan' ? r.pending : 0), 0),
+  )
+  // acreedores de un deudor, para anotar la lista de deuda acumulada
+  const creditorsOf = (key) =>
+    debtRows.value.filter((r) => r.kind === 'pair' && r.debtorKey === key)
 
   // agrupa los pedidos por relleno + pan + extras (conservando el texto original)
   function groupOrders() {
@@ -250,24 +280,41 @@ export function useOrders() {
     })
   }
 
-  async function clearAll() {
-    const prev = allOrders.value
-    allOrders.value = [] // optimista
-    try {
-      await api.clearDay(day.value)
-      notifyOk('Pedido del día vaciado')
-      refreshDebts()
-    } catch (e) {
-      allOrders.value = prev // rollback: antes se esperaban 30 s al refresco
-      notifyError('No se ha podido vaciar el pedido', e)
-    }
+  /*
+   * Vaciar el día, TAMBIÉN con deshacer. Era la operación más destructiva de la
+   * app y la única sin marcha atrás: un window.confirm y adiós. Ahora usa la
+   * misma maquinaria que borrar un pedido (ocultar ya, borrar al expirar el
+   * plazo), con más margen porque se lleva la cola entera.
+   *
+   * Ojo: al expirar, el DELETE vacía el día en el SERVIDOR, así que también se
+   * lleva lo que otra persona haya añadido durante el plazo. Eso ya pasaba.
+   */
+  function clearAll() {
+    const ids = visible.value.map((o) => o.id)
+    if (!ids.length) return
+    hide(ids)
+    notifyUndo(`Pedido del día vaciado — ${ids.length} ${ids.length === 1 ? 'bocata' : 'bocatas'}`, {
+      ttl: 8000,
+      onUndo: () => unhide(ids),
+      onExpire: async () => {
+        try {
+          await api.clearDay(day.value)
+          unhide(ids) // ya no están en el servidor: sobra el filtro local
+          refreshDebts()
+        } catch (e) {
+          unhide(ids) // vuelven a la lista: no se han borrado
+          notifyError('No se ha podido vaciar el pedido', e)
+        }
+      },
+    })
   }
 
-  // marca como pagado todo lo que debe una persona (opcionalmente de un solo día)
-  async function settle(person, onlyDay) {
+  // marca como pagado lo que debe una persona (de un solo día si se pasa, y solo
+  // lo que le debe a un acreedor concreto si se pasa)
+  async function settle(person, onlyDay, creditor) {
     try {
-      const res = await api.settle(person, onlyDay)
-      notifyOk(`Cuenta de ${person} saldada`)
+      const res = await api.settle(person, onlyDay, creditor)
+      notifyOk(creditor && isMe(creditor) ? `Cobrado a ${person}` : `Cuenta de ${person} saldada`)
       refreshDebts()
       refresh()
       return res
@@ -329,7 +376,15 @@ export function useOrders() {
     freshIds,
     arrival,
     debts,
+    debtRows,
     debtTotal,
+    iOwe,
+    owedToMe,
+    iOweTotal,
+    owedToMeTotal,
+    myUnmarked,
+    orphanTotal,
+    creditorsOf,
     dayTotal,
     dayPending,
     dayPaidCount,

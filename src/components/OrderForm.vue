@@ -23,8 +23,32 @@ const confirmDel = ref(null) // id del clásico esperando confirmación de borra
 // nombres ya usados: evita que la deuda se parta entre "Maria" y "maría"
 const knownPeople = ref([])
 
+// lo que más repite quien está escrito en el campo del nombre: cada día se
+// reescribía a mano el mismo bocata teniendo meses de histórico en el servidor
+const usual = ref([])
+let usualTimer = null
+
+// los habituales se piden con freno: el nombre se escribe letra a letra
+function loadUsual(name) {
+  clearTimeout(usualTimer)
+  const who = (name || '').trim()
+  if (who.length < 2) {
+    usual.value = []
+    return
+  }
+  usualTimer = setTimeout(async () => {
+    try {
+      usual.value = await api.usualOrders(who)
+    } catch {
+      usual.value = [] // es un atajo: si falla, se escribe a mano y ya está
+    }
+  }, 400)
+}
+watch(person, loadUsual)
+
 onMounted(async () => {
   person.value = me.value
+  loadUsual(person.value)
   try {
     knownPeople.value = await api.listPeople()
   } catch {
@@ -58,6 +82,27 @@ function saveAsClassic() {
   addClassic(filling.value)
 }
 
+// rellena el formulario con un pedido de siempre. El precio se recalcula con el
+// catálogo de HOY, no con el que tuviera hace dos meses; hay que ponerlo a mano
+// porque watch(suggested) solo dispara si el valor cambia.
+function applyUsual(u) {
+  filling.value = u.filling
+  bread.value = u.bread
+  notes.value = u.notes
+  size.value = u.size === 'half' ? 'half' : 'whole'
+  priceTouched = false
+  price.value = toInput(priceFor(u.filling, u.size))
+}
+
+// el chip solo tiene sitio para el relleno: el resto va en el title
+function usualTitle(u) {
+  const parts = [u.size === 'half' ? '½ media' : 'entero']
+  if (u.bread) parts.push(`pan: ${u.bread}`)
+  if (u.notes) parts.push(u.notes)
+  parts.push(`pedido ${u.times} ${u.times === 1 ? 'vez' : 'veces'}`)
+  return parts.join(' · ')
+}
+
 /*
  * Enviar y ESPERAR. Antes se vaciaba el formulario en el mismo tick que se
  * emitía el evento: si el POST fallaba, el usuario veía la señal de éxito
@@ -88,6 +133,7 @@ async function submit() {
   if (!knownPeople.value.includes(person.value.trim())) {
     knownPeople.value = [person.value.trim(), ...knownPeople.value]
   }
+  loadUsual(person.value) // el recuento de veces acaba de cambiar
   // el nombre se queda puesto a propósito: normalmente pides tú otra vez
   filling.value = ''
   bread.value = ''
@@ -192,6 +238,21 @@ function askRemoveClassic(id) {
           <span class="cur" aria-hidden="true">€</span>
         </span>
       </label>
+    </div>
+
+    <div v-if="usual.length" class="usual">
+      <span class="quick-lbl">🔁 lo de siempre:</span>
+      <button
+        v-for="u in usual"
+        :key="`${u.filling}|${u.bread}|${u.notes}|${u.size}`"
+        type="button"
+        class="chip usual-chip"
+        :title="usualTitle(u)"
+        @click="applyUsual(u)"
+      >
+        <span v-if="u.size === 'half'" class="u-half" aria-hidden="true">½ </span>{{ u.filling }}
+        <small class="u-times">·{{ u.times }}</small>
+      </button>
     </div>
 
     <div v-if="classicsLoading || classics.length || canSaveClassic" class="quick">
@@ -367,7 +428,8 @@ input:focus {
   font-weight: 700;
 }
 
-.quick {
+.quick,
+.usual {
   display: flex;
   align-items: center;
   flex-wrap: wrap;
@@ -417,6 +479,32 @@ input:focus {
   transition: color 0.15s;
 }
 .chip-del:hover { color: var(--g1); }
+
+/* chip de "lo de siempre": mismo cuerpo que un clásico, borde de acción como
+   .chip.add, porque no es una etiqueta del catálogo sino un atajo */
+.usual-chip {
+  font-family: var(--mono);
+  font-size: var(--fs-2);
+  color: var(--ink);
+  background: transparent;
+  border-color: var(--line-2);
+  padding: 0.28rem 0.7rem;
+  min-height: var(--tap);
+  cursor: pointer;
+  transition: color 0.15s, background 0.15s, border-color 0.15s;
+}
+.usual-chip:hover {
+  color: var(--bg);
+  background: var(--ink);
+  border-color: var(--ink);
+}
+.u-times {
+  margin-left: 0.4ch;
+  font-size: var(--fs-1);
+  color: var(--ink-faint);
+  font-variant-numeric: tabular-nums;
+}
+.usual-chip:hover .u-times { color: var(--bg); }
 
 .quick-loading { font-size: var(--fs-1); color: var(--ink-dim); }
 

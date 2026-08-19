@@ -48,9 +48,20 @@ export const api = {
   updateOrder: (id, fields) => req('PUT', `/api/orders/${id}`, { clientId, ...fields }),
   removeOrder: (id) => req('DELETE', `/api/orders/${id}${qs({ clientId })}`),
   clearDay: (day) => req('DELETE', `/api/orders${qs({ day, clientId })}`),
+  // lo que más repite una persona, para el botón "lo de siempre"
+  usualOrders: (person, limit) => req('GET', `/api/orders/usual${qs({ person, limit })}`),
 
-  // pagos: saldar todo lo que debe una persona (o solo un día)
-  settle: (person, day) => req('POST', '/api/payments/settle', { person, day, clientId }),
+  // pagos: saldar lo que debe una persona (opcionalmente de un solo día, y
+  // opcionalmente solo lo que le debe a un acreedor concreto)
+  settle: (person, day, creditor) =>
+    req('POST', '/api/payments/settle', { person, day, creditor, clientId }),
+
+  // deuda con acreedor: quién debe a quién, de todos los días sin pagar
+  debts: (params = {}) => req('GET', `/api/debts${qs(params)}`),
+
+  // pagador: quién puso el dinero un día (vacío = volver a seguir al sorteo)
+  getPayer: (day) => req('GET', `/api/payers${qs({ day })}`),
+  setPayer: (day, person) => req('PUT', '/api/payers', { day, person, clientId }),
 
   // ausencias: quién no puede ir hoy (queda fuera del sorteo)
   listUnavailable: (day) => req('GET', `/api/unavailable${qs({ day })}`),

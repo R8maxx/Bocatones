@@ -53,9 +53,10 @@ export const notifyError = (text, e) => push({ kind: 'error', text, detail: reas
 export const notifyOk = (text) => push({ kind: 'ok', text })
 
 // aviso con deshacer: si se agota el plazo se ejecuta `onExpire` (confirmar),
-// si se pulsa deshacer se ejecuta `onUndo` y no se confirma nada
-export const notifyUndo = (text, { onUndo, onExpire }) =>
-  push({ kind: 'undo', text, onUndo, onExpire })
+// si se pulsa deshacer se ejecuta `onUndo` y no se confirma nada.
+// `ttl` es opcional: vaciar el día entero merece más margen que una sola baja.
+export const notifyUndo = (text, { onUndo, onExpire, ttl }) =>
+  push({ kind: 'undo', text, onUndo, onExpire, ttl })
 
 export function undo(id) {
   const n = notices.value.find((x) => x.id === id)

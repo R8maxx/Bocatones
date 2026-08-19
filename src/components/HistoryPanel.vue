@@ -21,9 +21,9 @@ import { confirmSettle } from '../composables/useSettle.js'
 const { isMe } = useMe()
 
 const {
-  days, selectedDay, dayDetail, people, odds, totals,
+  days, selectedDay, dayDetail, people, odds, totals, creditorsOf,
   loading, detailLoading, ready, error,
-  load, select, setPaid, settle, setWinner,
+  load, select, setPaid, settle, setWinner, setPayer,
 } = useHistory()
 
 const today = todayKey()
@@ -54,10 +54,30 @@ const dayPeople = computed(() => {
 })
 
 const editingWinner = ref(false)
+const editingPayer = ref(false)
+
 async function chooseWinner(e) {
   const name = e.target.value
   editingWinner.value = false
   if (name) await setWinner(selectedDay.value, name)
+}
+
+// cadena vacía = ese día vuelve a pagar quien recogió
+async function choosePayer(e) {
+  const name = e.target.value
+  editingPayer.value = false
+  await setPayer(selectedDay.value, name)
+}
+
+/*
+ * Los dos correctores son estado del PANEL, no de la fila: si se despliega otro
+ * día con un selector abierto, se queda abierto sobre datos que no son los
+ * suyos. Se cierran al cambiar de día.
+ */
+function openDay(day) {
+  editingWinner.value = false
+  editingPayer.value = false
+  return select(day)
 }
 
 // probabilidad con coma decimal, como el resto de los números de la app
@@ -66,8 +86,8 @@ const pct = (chance) => PCT.format(chance)
 
 const maxSpent = computed(() => Math.max(1, ...people.value.map((p) => p.spent)))
 
-function askSettle(person, pending) {
-  if (confirmSettle(person, pending)) settle(person)
+async function askSettle(person, pending) {
+  if (await confirmSettle(person, pending)) settle(person).catch(() => {})
 }
 </script>
 
@@ -104,7 +124,7 @@ function askSettle(person, pending) {
             type="button"
             :class="{ open: selectedDay === d.day }"
             :aria-expanded="selectedDay === d.day"
-            @click="select(d.day)"
+            @click="openDay(d.day)"
           >
             <span class="d-caret" aria-hidden="true">{{ selectedDay === d.day ? '▾' : '▸' }}</span>
             <span class="d-date">
@@ -112,10 +132,18 @@ function askSettle(person, pending) {
               <small v-if="d.day === today" class="d-today">hoy</small>
             </span>
             <span class="d-who">
-              <template v-if="d.winner">
-                <span class="d-emoji">{{ personEmoji(d.winner) }}</span>{{ d.winner }}
-              </template>
-              <span v-else class="d-nowho">— sin sorteo —</span>
+              <span class="d-whotxt">
+                <template v-if="d.winner">
+                  <span class="d-emoji">{{ personEmoji(d.winner) }}</span>{{ d.winner }}
+                </template>
+                <span v-else class="d-nowho">— sin sorteo —</span>
+              </span>
+              <!-- solo cuando no coinciden: si paga quien recoge, no hace falta decirlo -->
+              <small
+                v-if="d.payer && d.payer.toLowerCase() !== (d.winner || '').toLowerCase()"
+                class="d-paid"
+                :title="`ese día puso el dinero ${d.payer}`"
+              >💳 {{ d.payer }}</small>
             </span>
             <span class="d-n">
               {{ d.orders }}<span aria-hidden="true"> 🥪</span>
@@ -151,6 +179,19 @@ function askSettle(person, pending) {
               </template>
               <select v-else class="dd-sel" aria-label="quién recogió de verdad" @change="chooseWinner">
                 <option value="">elige…</option>
+                <option v-for="p in dayPeople" :key="p" :value="p">{{ p }}</option>
+              </select>
+              <span class="dd-lbl">// pagó</span>
+              <template v-if="!editingPayer">
+                <span class="dd-winner">
+                  <span class="d-emoji">{{ dayDetail.payer ? personEmoji(dayDetail.payer) : '❔' }}</span>
+                  {{ dayDetail.payer || 'sin pagador' }}
+                  <small v-if="dayDetail.payerSource === 'draw'" class="dd-src">// quien recogió</small>
+                </span>
+                <button class="dd-fix" type="button" @click="editingPayer = true">✎ cambiar</button>
+              </template>
+              <select v-else class="dd-sel" aria-label="quién puso el dinero ese día" @change="choosePayer">
+                <option value="">— sigue a quien recogió —</option>
                 <option v-for="p in dayPeople" :key="p" :value="p">{{ p }}</option>
               </select>
               <span class="dd-money">
@@ -210,6 +251,9 @@ function askSettle(person, pending) {
               <button class="p-settle" type="button" @click="askSettle(p.name, p.pending)">
                 <span>debe</span>&nbsp;<MoneyValue :cents="p.pending" />&nbsp;<span>· saldar</span>
               </button>
+              <small v-if="creditorsOf(p.name).length" class="p-to">
+                a {{ creditorsOf(p.name).map((c) => `${c.creditor} ${fmt(c.pending)}`).join(' · ') }}
+              </small>
             </template>
             <span v-else class="p-ok">✓ al día</span>
           </span>
@@ -378,7 +422,14 @@ function askSettle(person, pending) {
 .d-row.open { border-left-color: var(--g7); background: var(--panel); color: var(--ink); }
 .d-caret { color: var(--ink-faint); }
 .d-date { color: var(--ink); white-space: nowrap; display: inline-flex; align-items: center; gap: 0.5ch; }
+/* nombre arriba y, debajo, quién puso el dinero cuando no es quien recogió */
 .d-who {
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  justify-content: center;
+}
+.d-whotxt {
   min-width: 0;
   display: inline-flex;
   align-items: center;
@@ -450,6 +501,14 @@ function askSettle(person, pending) {
   transition: color 0.15s, background 0.15s, border-color 0.15s;
 }
 .dd-fix:hover { color: var(--bg); background: var(--g7); border-color: var(--g7); }
+/* el pagador del día y los acreedores: matices, nunca protagonistas */
+.d-paid, .dd-src, .p-to {
+  font-size: var(--fs-1);
+  color: var(--ink-faint);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
 .dd-sel {
   font-family: var(--mono);
   font-size: var(--fs-2);
@@ -502,7 +561,13 @@ function askSettle(person, pending) {
   text-overflow: ellipsis;
 }
 .p-num.spent { color: var(--ink); }
-.p-pend { text-align: right; }
+.p-pend {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-end;
+  gap: 0.15rem;
+  text-align: right;
+}
 .p-ok { font-size: var(--fs-2); color: var(--g5); white-space: nowrap; }
 .p-settle { color: var(--g6); border-color: color-mix(in srgb, var(--g6) 45%, var(--line-2)); white-space: nowrap; }
 .p-settle:hover { color: var(--bg); background: var(--g6); border-color: var(--g6); }

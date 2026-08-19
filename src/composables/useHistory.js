@@ -16,6 +16,7 @@ const selectedDay = ref(null)
 const dayDetail = ref(null) // { day, orders, draw, totals }
 const people = ref([]) // [{ name, orders, days, spent, pending, gone }]
 const odds = ref(null) // { day, candidates, total } — papeletas de HOY
+const debts = ref([]) // pares deudor→acreedor, para anotar a quién se le debe
 const ready = ref(false) // ya se ha cargado al menos una vez (para no mentir en los vacíos)
 const detailLoading = ref(false) // cargando el detalle de un día concreto
 const loading = ref(true) // arranca cargando: ver ready
@@ -27,6 +28,9 @@ async function loadDays() {
 }
 async function loadPeople() {
   people.value = await api.historyPeople()
+}
+async function loadDebts() {
+  debts.value = (await api.debts()).rows
 }
 async function loadOdds() {
   try {
@@ -49,7 +53,7 @@ async function loadDetail(day) {
 async function reload() {
   if (!opened) return
   try {
-    await Promise.all([loadDays(), loadPeople(), loadOdds()])
+    await Promise.all([loadDays(), loadPeople(), loadOdds(), loadDebts()])
     if (selectedDay.value) await loadDetail(selectedDay.value)
     error.value = null
   } catch (e) {
@@ -64,7 +68,7 @@ export function useHistory() {
     opened = true
     loading.value = true
     try {
-      await Promise.all([loadDays(), loadPeople(), loadOdds()])
+      await Promise.all([loadDays(), loadPeople(), loadOdds(), loadDebts()])
       error.value = null
     } catch (e) {
       error.value = e.message
@@ -74,7 +78,13 @@ export function useHistory() {
     ready.value = true
     if (first) {
       onMessage((msg) => {
-        if (msg.type === 'orders' || msg.type === 'paid' || msg.type === 'draw' || msg.type === '__open') {
+        if (
+          msg.type === 'orders' ||
+          msg.type === 'paid' ||
+          msg.type === 'draw' ||
+          msg.type === 'payer' ||
+          msg.type === '__open'
+        ) {
           reload()
         }
       })
@@ -108,6 +118,12 @@ export function useHistory() {
     }
   }
 
+  // a quién le debe una persona (solo para anotar la fila; el dinero lo suma el
+  // servidor). Aquí sí vale toLowerCase(): compara contra una clave que ya vino
+  // de SQL y no agrupa dinero.
+  const creditorsOf = (name) =>
+    debts.value.filter((r) => r.kind === 'pair' && r.debtorKey === (name || '').toLowerCase())
+
   // saldar toda la cuenta de una persona (o solo la de un día)
   async function settle(person, day) {
     try {
@@ -130,6 +146,19 @@ export function useHistory() {
     }
   }
 
+  // corregir quién puso el dinero ese día (vacío = seguir a quien recogió)
+  async function setPayer(day, person) {
+    try {
+      const res = await api.setPayer(day, person)
+      if (!person) notifyOk('Ese día vuelve a pagar quien recogió')
+      else if (res.settled) notifyOk(`Ese día pagó ${res.payer} — ${res.settled} pedidos ya pagados no cambian de acreedor`)
+      else notifyOk(`Ese día pagó ${res.payer}`)
+      await reload()
+    } catch (e) {
+      notifyError('No se ha podido cambiar quién pagó', e)
+    }
+  }
+
   const totals = computed(() =>
     days.value.reduce(
       (acc, d) => ({
@@ -147,6 +176,8 @@ export function useHistory() {
     dayDetail,
     people,
     odds,
+    debts,
+    creditorsOf,
     totals,
     loading,
     detailLoading,
@@ -157,6 +188,7 @@ export function useHistory() {
     setPaid,
     settle,
     setWinner,
+    setPayer,
     reload,
   }
 }

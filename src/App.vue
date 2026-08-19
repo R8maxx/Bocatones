@@ -8,29 +8,51 @@ import SlotMachine from './components/SlotMachine.vue'
 import HistoryPanel from './components/HistoryPanel.vue'
 import PriceList from './components/PriceList.vue'
 import Notices from './components/Notices.vue'
+import ConfirmDialog from './components/ConfirmDialog.vue'
 import MoneyValue from './components/MoneyValue.vue'
 import { useOrders } from './composables/useOrders.js'
 import { useDraw } from './composables/useDraw.js'
 import { personEmoji } from './composables/usePersonEmoji.js'
 import { fmt } from './money.js'
-import { confirmSettle } from './composables/useSettle.js'
+import { confirmSettle, confirmCollect } from './composables/useSettle.js'
+import { usePayer } from './composables/usePayer.js'
 import { useMe } from './composables/useMe.js'
-import { rtStatus } from './realtime.js'
+import { rtStatus, isOnline } from './realtime.js'
+import { confirm, useConfirm } from './composables/useConfirm.js'
 
 const { isMe } = useMe()
+
+// el diálogo propio que ha sustituido a los window.confirm
+const { pending: confirmPending } = useConfirm()
 
 const live = {
   online: { txt: 'EN DIRECTO', cls: 'on' },
   connecting: { txt: 'CONECTANDO', cls: 'wait' },
   offline: { txt: 'RECONECTANDO', cls: 'off' },
 }
-const liveState = computed(() => live[rtStatus.value] || live.offline)
+// sin red gana al estado del WebSocket: instalada como PWA la app abre desde la
+// caché, y "RECONECTANDO" a secas no explica que el problema es del dispositivo
+const liveState = computed(() =>
+  isOnline.value ? live[rtStatus.value] || live.offline : { txt: 'SIN RED', cls: 'off' },
+)
 
 const {
   orders, count, byFilling, loading, error, freshIds, arrival,
   debts, debtTotal, dayTotal, dayPending, dayPaidCount,
+  iOwe, owedToMe, iOweTotal, myUnmarked, orphanTotal, creditorsOf,
   addOrder, updateOrder, removeOrder, setPaid, settle, clearAll, buildPlainList,
 } = useOrders()
+
+// quién pone el dinero hoy: por defecto quien recoge, corregible a mano
+const { payer, setPayer } = usePayer()
+
+// corrector del pagador: mismo patrón que el «✎ corregir» del histórico
+// (texto → botón → select), para que se aprenda una sola vez
+const editingPayer = ref(false)
+function choosePayer(e) {
+  editingPayer.value = false
+  setPayer(e.target.value) // '' = volver a seguir al sorteo
+}
 
 // sorteo de quién recoge los bocatas (ponderado: quien menos ha ido, más papeletas)
 const { open: slotOpen, round: slotRound, draw, winner, odds, openMachine, confirmDraw, closeDraw, toggleAvailable } =
@@ -81,8 +103,15 @@ async function onAdd(fields, { resolve, reject }) {
   }
 }
 
-function askSettle(person, pending) {
-  if (confirmSettle(person, pending)) settle(person).catch(() => {})
+// cobrar: solo lo que te deben A TI, no todo lo que esa persona debe
+async function askCollect(row) {
+  if (await confirmCollect(row.debtor, row.pending)) {
+    settle(row.debtor, null, row.creditor).catch(() => {})
+  }
+}
+
+async function askSettle(person, pending) {
+  if (await confirmSettle(person, pending)) settle(person).catch(() => {})
 }
 
 // al tirar de la palanca se pide el sorteo al servidor (y aparece en todas las pantallas)
@@ -194,20 +223,20 @@ async function copyList() {
     try {
       document.execCommand('copy')
     } catch {
-      window.prompt('Copia la lista manualmente:', text)
+      // último recurso: se le da el texto para que lo seleccione a mano
+      confirm({
+        title: 'copiar a mano',
+        text: 'Tu navegador no ha dejado copiar la lista. Selecciónala y cópiala:',
+        code: text,
+        onlyOk: true,
+        confirmLabel: 'cerrar',
+      })
     }
     document.body.removeChild(ta)
   }
   copied.value = true
   clearTimeout(copyTimer)
   copyTimer = setTimeout(() => (copied.value = false), 2200)
-}
-
-function confirmClear() {
-  if (count.value === 0) return
-  if (window.confirm('¿Vaciar todo el pedido? Esto no se puede deshacer.')) {
-    clearAll()
-  }
 }
 </script>
 
@@ -265,6 +294,13 @@ function confirmClear() {
         <span v-if="dayPending" class="sb-due">
           sin pagar <MoneyValue :cents="dayPending" />
         </span>
+        <span
+          v-if="iOweTotal"
+          class="sb-owe"
+          :title="iOwe.map((r) => `${r.creditor}: ${fmt(r.pending)}`).join(' · ')"
+        >
+          debes <MoneyValue :cents="iOweTotal" />
+        </span>
         <span class="sb-actions">
           <button class="sb-btn" type="button" @click="toggleView">
             {{ view === 'history' ? '← hoy' : '📜 histórico' }}
@@ -297,8 +333,29 @@ function confirmClear() {
         </div>
 
         <!-- dinero: lo de hoy y la deuda que se arrastra de otros días -->
-        <div v-if="count || debts.length" class="money-card">
+        <div v-if="count || debts.length || payer" class="money-card">
           <h2 class="money-head">// la cuenta</h2>
+
+          <!-- quién pone el dinero hoy: por defecto quien recoge, corregible -->
+          <div class="pay-row">
+            <span class="pay-lbl">hoy paga</span>
+            <template v-if="!editingPayer">
+              <span class="pay-who">
+                <span class="pay-emoji" aria-hidden="true">{{ payer ? personEmoji(payer.name) : '❔' }}</span>
+                <span class="pay-txt">
+                  <span class="pay-name">{{ payer ? payer.name : 'nadie, por ahora' }}</span>
+                  <small v-if="payer?.source === 'draw'" class="pay-src">// quien recoge</small>
+                  <small v-else-if="payer" class="pay-src">// fijado a mano</small>
+                  <small v-else class="pay-src">// nadie ha puesto el dinero</small>
+                </span>
+              </span>
+              <button class="pay-fix" type="button" @click="editingPayer = true">✎ cambiar</button>
+            </template>
+            <select v-else class="pay-sel" aria-label="quién pone el dinero hoy" @change="choosePayer">
+              <option value="">— que lo diga el sorteo —</option>
+              <option v-for="p in people" :key="p" :value="p">{{ p }}</option>
+            </select>
+          </div>
 
           <div v-if="count" class="money-today">
             <span class="mt-row">
@@ -315,16 +372,42 @@ function confirmClear() {
             <span class="mt-hint">{{ dayPaidCount }}/{{ count }} pedidos pagados</span>
           </div>
 
+          <!-- tu posición en la cuenta: con nombre y apellidos, no un total ciego -->
+          <div v-if="iOwe.length || owedToMe.length || myUnmarked.length" class="mine-money">
+            <p v-for="r in iOwe" :key="'owe-' + r.creditorKey" class="mm-row owe">
+              <span>debes <MoneyValue :cents="r.pending" /> a</span>
+              <span class="mm-emoji" aria-hidden="true">{{ personEmoji(r.creditor) }}</span>
+              <b>{{ r.creditor }}</b>
+              <small v-if="r.days > 1">· {{ r.days }} días</small>
+            </p>
+            <p v-for="r in owedToMe" :key="'owed-' + r.debtorKey" class="mm-row owed">
+              <span>te debe <MoneyValue :cents="r.pending" /></span>
+              <span class="mm-emoji" aria-hidden="true">{{ personEmoji(r.debtor) }}</span>
+              <b>{{ r.debtor }}</b>
+              <button class="mm-btn" type="button" @click="askCollect(r)">✓ cobrado</button>
+            </p>
+            <p v-for="r in myUnmarked" :key="'self-' + r.debtorKey" class="mm-row self">
+              <span>pusiste el dinero: tu <MoneyValue :cents="r.pending" /> sigue sin marcar</span>
+              <button class="mm-btn" type="button" @click="askCollect(r)">✓ marcar</button>
+            </p>
+          </div>
+
           <div v-if="debts.length" class="debts">
             <h3 class="debts-head">
               deuda acumulada <span class="debts-total"><MoneyValue :cents="debtTotal" /></span>
             </h3>
             <ul>
-              <li v-for="d in debts" :key="d.name" class="debt-row" :class="{ mine: isMe(d.name) }">
+              <li v-for="d in debts" :key="d.key" class="debt-row" :class="{ mine: isMe(d.name) }">
                 <span class="debt-who">
                   <span class="debt-emoji" aria-hidden="true">{{ personEmoji(d.name) }}</span>
-                  <span class="debt-name">{{ d.name }}</span>
-                  <span v-if="isMe(d.name)" class="mine-tag">« tú »</span>
+                  <span class="debt-txt">
+                    <span class="debt-name">
+                      {{ d.name }}<span v-if="isMe(d.name)" class="mine-tag"> « tú »</span>
+                    </span>
+                    <small v-if="creditorsOf(d.key).length" class="debt-to">
+                      → a {{ creditorsOf(d.key).map((c) => `${c.creditor} ${fmt(c.pending)}`).join(' · ') }}
+                    </small>
+                  </span>
                 </span>
                 <button
                   class="debt-amount"
@@ -335,6 +418,9 @@ function confirmClear() {
               </li>
             </ul>
             <p class="debts-hint">// pulsa el importe para saldar</p>
+            <p v-if="orphanTotal" class="debts-orphan">
+              ⚠ <MoneyValue :cents="orphanTotal" /> de días sin pagador — apunta quién puso el dinero
+            </p>
           </div>
 
           <p v-else-if="count" class="debts-clear">✓ nadie arrastra deuda de otros días</p>
@@ -383,7 +469,12 @@ function confirmClear() {
             <span aria-hidden="true">{{ copied ? '✓' : '⧉' }}</span>
             {{ copied ? 'copiado' : 'copiar lista' }}
           </button>
-          <button class="clear" type="button" @click="confirmClear">rm -rf *</button>
+          <button
+            class="clear"
+            type="button"
+            title="Vaciar el pedido del día — se puede deshacer"
+            @click="clearAll"
+          >rm -rf *</button>
         </div>
       </div>
 
@@ -433,7 +524,7 @@ function confirmClear() {
           loading="lazy"
           decoding="async"
         />
-        <span>Deseing by <b>RM Technology</b></span>
+        <span>Design by <b>RM Technology</b></span>
       </p>
     </footer>
 
@@ -466,6 +557,13 @@ function confirmClear() {
     />
 
     <PriceList v-if="showPrices" @close="showPrices = false" />
+
+    <!--
+      Pregunta antes de actuar (saldar, cobrar…). Se monta y desmonta con la
+      pregunta, como PriceList: useModal engancha el foco y el Escape al montar.
+      El :key fuerza el remontaje si una pregunta reemplaza a otra.
+    -->
+    <ConfirmDialog v-if="confirmPending" :key="confirmPending.id" />
 
     <!-- avisos del sistema: errores, confirmaciones y deshacer -->
     <Notices />
@@ -547,9 +645,9 @@ function confirmClear() {
   color: var(--ink);
   white-space: nowrap;
 }
-.sb-who, .sb-due { display: inline-flex; align-items: center; gap: 0.5ch; white-space: nowrap; }
+.sb-who, .sb-due, .sb-owe { display: inline-flex; align-items: center; gap: 0.5ch; white-space: nowrap; }
 .sb-who b { color: var(--ink); }
-.sb-due { color: var(--g6); font-weight: 700; }
+.sb-due, .sb-owe { color: var(--g6); font-weight: 700; }
 .sb-actions { margin-left: auto; display: flex; gap: var(--sp-1); }
 .sb-btn {
   font-family: var(--mono);
@@ -568,7 +666,7 @@ function confirmClear() {
 .sb-btn:hover { color: var(--ink); border-color: var(--ink-dim); }
 
 @media (max-width: 620px) {
-  .sb-who, .sb-due { font-size: var(--fs-1); }
+  .sb-who, .sb-due, .sb-owe { font-size: var(--fs-1); }
   .sb-brand { display: none; }
 }
 .statusbar .sep { color: var(--ink-faint); }
@@ -730,6 +828,105 @@ main {
   letter-spacing: 0.08em;
   margin-bottom: 0.8rem;
 }
+/* ---- hoy paga: el acreedor del día ---- */
+.pay-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  flex-wrap: wrap;
+  gap: 0.5rem 0.8rem;
+  padding-bottom: 0.8rem;
+  margin-bottom: 0.8rem;
+  border-bottom: 1px dashed var(--line-2);
+}
+.pay-lbl {
+  font-size: var(--fs-2);
+  color: var(--ink-dim);
+}
+.pay-who { display: inline-flex; align-items: center; gap: 0.6ch; min-width: 0; }
+.pay-emoji { font-size: var(--fs-4); line-height: 1; flex-shrink: 0; }
+.pay-txt { min-width: 0; display: flex; flex-direction: column; }
+.pay-name {
+  color: var(--ink);
+  font-weight: 700;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.pay-src { font-size: var(--fs-1); color: var(--ink-faint); }
+/* mismas piezas que el corrector del histórico (.dd-fix / .dd-sel): el gesto
+   "texto → ✎ → select" se aprende una vez y vale en las dos pantallas */
+.pay-fix {
+  display: inline-flex;
+  align-items: center;
+  min-height: var(--tap);
+  font-family: var(--mono);
+  font-size: var(--fs-1);
+  color: var(--ink-dim);
+  background: transparent;
+  border: 1px solid var(--line-2);
+  border-radius: var(--radius-pill);
+  padding: 0.2rem 0.6rem;
+  cursor: pointer;
+  transition: color 0.15s, background 0.15s, border-color 0.15s;
+}
+.pay-fix:hover { color: var(--bg); background: var(--g7); border-color: var(--g7); }
+.pay-sel {
+  font-family: var(--mono);
+  font-size: var(--fs-2);
+  color: var(--ink);
+  background: var(--bg-soft);
+  border: 1px solid var(--ink);
+  border-radius: var(--radius);
+  padding: 0.25rem 0.5rem;
+  max-width: 100%;
+}
+
+/* ---- tu posición: a quién le debes y quién te debe ---- */
+.mine-money {
+  display: flex;
+  flex-direction: column;
+  gap: 0.35rem;
+  margin-top: 0.85rem;
+}
+.mm-row {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 0.5ch;
+  font-size: var(--fs-2);
+  color: var(--ink-dim);
+  padding-left: 0.6rem;
+  border-left: 2px solid var(--line-2);
+}
+.mm-row b { color: var(--ink); }
+.mm-row small { color: var(--ink-faint); }
+.mm-emoji { font-size: var(--fs-3); line-height: 1; }
+/* deuda es deuda se mire desde donde se mire: el naranja no cambia de bando,
+   la dirección la dicen la palabra y el borde */
+.mm-row.owe { border-left-color: var(--g6); }
+.mm-row.owe :deep(.money) { color: var(--g6); font-weight: 700; }
+.mm-row.owed :deep(.money) { color: var(--g6); font-weight: 700; }
+.mm-row.self { border-left-color: var(--g3); }
+.mm-btn {
+  margin-left: auto;
+  display: inline-flex;
+  align-items: center;
+  min-height: var(--tap);
+  font-family: var(--mono);
+  font-size: var(--fs-1);
+  color: var(--ink-dim);
+  background: transparent;
+  border: 1px solid var(--line-2);
+  border-radius: var(--radius-pill);
+  padding: 0.16rem 0.55rem;
+  cursor: pointer;
+  white-space: nowrap;
+  transition: color 0.15s, background 0.15s, border-color 0.15s;
+}
+/* la acción RESULTA en "pagado": ahí sí toca el verde */
+.mm-btn:hover { color: var(--bg); background: var(--g5); border-color: var(--g5); }
+
 .money-today { display: flex; flex-direction: column; gap: 0.3rem; }
 .mt-row {
   display: flex;
@@ -766,6 +963,15 @@ main {
   font-size: var(--fs-2);
 }
 .debt-who { min-width: 0; display: inline-flex; align-items: center; gap: 0.5ch; }
+/* el nombre y su acreedor, en columna: "→ a Marta" no cabe en la misma línea */
+.debt-txt { min-width: 0; display: flex; flex-direction: column; }
+.debt-to {
+  font-size: var(--fs-1);
+  color: var(--ink-faint);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
 .debt-emoji { font-size: var(--fs-4); line-height: 1; }
 .debt-name {
   color: var(--ink);
@@ -794,6 +1000,10 @@ main {
 }
 .debt-amount:hover { color: var(--bg); background: var(--g6); border-color: var(--g6); }
 .debts-hint { font-size: var(--fs-1); color: var(--ink-faint); margin-top: 0.55rem; }
+/* deuda que no se sabe a quién devolver: se cuenta, no se esconde */
+.debts-orphan { font-size: var(--fs-1); color: var(--g6); margin-top: 0.4rem; }
+/* le faltaba la regla: era el único texto de la tarjeta sin tamaño ni color */
+.debts-clear { font-size: var(--fs-2); color: var(--g5); margin-top: 0.9rem; }
 
 .tally {
   border: 1px solid var(--line);

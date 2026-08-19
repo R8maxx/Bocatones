@@ -9,6 +9,22 @@ import { ref } from 'vue'
 
 export const rtStatus = ref('connecting') // connecting | online | offline
 
+/*
+ * ¿tiene red el dispositivo? Con la app instalada como PWA, la interfaz abre
+ * desde la caché aunque no haya red, y entonces el WebSocket dice
+ * "RECONECTANDO" sin explicar por qué. Esto lo explica.
+ */
+export const isOnline = ref(typeof navigator === 'undefined' ? true : navigator.onLine !== false)
+if (typeof window !== 'undefined') {
+  window.addEventListener('online', () => {
+    isOnline.value = true
+    // volver de un túnel no debe costar los 10 s del backoff
+    backoff = 1000
+    if (!socket || socket.readyState > 1) connect()
+  })
+  window.addEventListener('offline', () => (isOnline.value = false))
+}
+
 const listeners = new Set()
 let socket = null
 let reconnectTimer = null
