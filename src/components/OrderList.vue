@@ -109,8 +109,15 @@ function save(id) {
           </div>
         </template>
 
-        <!-- modo edición -->
+        <!--
+          Modo edición. La transición envuelve SÓLO al formulario, que en
+          .row.editing es el segundo hijo del grid: meter un div de envoltorio
+          alrededor de cada rama rompería las dos rejillas (auto 1fr auto auto
+          en la vista normal, auto 1fr aquí). Con `appear` el formulario entra
+          animado en vez de aparecer de golpe.
+        -->
         <template v-else>
+          <Transition name="swap" appear>
           <form class="edit-form" @submit.prevent="save(o.id)">
             <div class="e-grid">
               <input ref="firstInput" v-model="draft.person" placeholder="nombre" maxlength="40" />
@@ -133,6 +140,7 @@ function save(id) {
               <button class="e-btn cancel" type="button" @click="cancel">cancelar</button>
             </div>
           </form>
+          </Transition>
         </template>
       </li>
     </TransitionGroup>
@@ -158,8 +166,8 @@ function save(id) {
 .row {
   position: relative;
   display: grid;
-  animation: row-in 0.4s cubic-bezier(0.2, 0.8, 0.2, 1) backwards;
-  animation-delay: calc(var(--i, 0) * 45ms);
+  animation: row-in var(--dur-4) var(--ease-out) backwards;
+  animation-delay: calc(var(--i, 0) * var(--stagger));
   grid-template-columns: auto 1fr auto auto;
   align-items: center;
   gap: 0.9rem;

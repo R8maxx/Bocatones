@@ -2,6 +2,7 @@
 import { computed, onMounted, ref, watch } from 'vue'
 import { useClassics } from '../composables/useClassics.js'
 import { useMe } from '../composables/useMe.js'
+import { usePeople } from '../composables/usePeople.js'
 import { api } from '../api.js'
 import { toInput, parse } from '../money.js'
 
@@ -20,8 +21,10 @@ let priceTouched = false // si lo escribes a mano, dejamos de sobreescribirlo
 const sending = ref(false) // petición en vuelo: evita el doble envío
 const confirmDel = ref(null) // id del clásico esperando confirmación de borrado
 
-// nombres ya usados: evita que la deuda se parta entre "Maria" y "maría"
-const knownPeople = ref([])
+// nombres ya usados: evita que la deuda se parta entre "Maria" y "maría".
+// La lista es compartida (usePeople): los selectores de "hoy paga" y "hoy
+// recoge" necesitan la misma, y traerla dos veces era pedir lo mismo dos veces.
+const { people: knownPeople, addPerson } = usePeople()
 
 // lo que más repite quien está escrito en el campo del nombre: cada día se
 // reescribía a mano el mismo bocata teniendo meses de histórico en el servidor
@@ -46,14 +49,9 @@ function loadUsual(name) {
 }
 watch(person, loadUsual)
 
-onMounted(async () => {
+onMounted(() => {
   person.value = me.value
   loadUsual(person.value)
-  try {
-    knownPeople.value = await api.listPeople()
-  } catch {
-    /* el autocompletado es solo una ayuda */
-  }
 })
 
 const valid = computed(() => person.value.trim() && filling.value.trim())
@@ -130,9 +128,7 @@ async function submit() {
   }
 
   setMe(person.value)
-  if (!knownPeople.value.includes(person.value.trim())) {
-    knownPeople.value = [person.value.trim(), ...knownPeople.value]
-  }
+  addPerson(person.value)
   loadUsual(person.value) // el recuento de veces acaba de cambiar
   // el nombre se queda puesto a propósito: normalmente pides tú otra vez
   filling.value = ''
@@ -242,6 +238,7 @@ function askRemoveClassic(id) {
 
     <div v-if="usual.length" class="usual">
       <span class="quick-lbl">🔁 lo de siempre:</span>
+      <TransitionGroup name="chip">
       <button
         v-for="u in usual"
         :key="`${u.filling}|${u.bread}|${u.notes}|${u.size}`"
@@ -253,6 +250,7 @@ function askRemoveClassic(id) {
         <span v-if="u.size === 'half'" class="u-half" aria-hidden="true">½ </span>{{ u.filling }}
         <small class="u-times">·{{ u.times }}</small>
       </button>
+      </TransitionGroup>
     </div>
 
     <div v-if="classicsLoading || classics.length || canSaveClassic" class="quick">
@@ -260,6 +258,7 @@ function askRemoveClassic(id) {
 
       <span v-if="classicsLoading" class="quick-loading">cargando…</span>
 
+      <TransitionGroup name="chip">
       <span v-for="c in classics" :key="c.id" class="chip" :class="{ arming: confirmDel === c.id }">
         <button type="button" class="chip-pick" @click="pick(c.name)">
           {{ c.name }}<small v-if="c.priceWhole !== null" class="chip-price">{{ toInput(c.priceWhole) }}€</small>
@@ -271,13 +270,16 @@ function askRemoveClassic(id) {
           @click="askRemoveClassic(c.id)"
         >{{ confirmDel === c.id ? '¿seguro?' : '✕' }}</button>
       </span>
+      </TransitionGroup>
 
+      <Transition name="pop">
       <button
         v-if="canSaveClassic"
         type="button"
         class="chip add"
         @click="saveAsClassic"
       >+ guardar «{{ filling.trim() }}»</button>
+      </Transition>
     </div>
 
     <button class="submit" type="submit" :disabled="!valid || sending">
@@ -435,6 +437,9 @@ input:focus {
   flex-wrap: wrap;
   gap: 0.5rem;
   margin: var(--sp-3) 0;
+  /* ancla del chip que se va: al salir pasa a position:absolute para que el
+     resto se deslice a su hueco en vez de dar un salto (ver .chip-leave-active) */
+  position: relative;
 }
 .quick-lbl {
   font-size: var(--fs-2);

@@ -107,10 +107,39 @@ export function useDraw() {
     }
   }
 
+  /*
+   * Decir a mano quién recoge hoy, sin pasar por la tragaperras.
+   *
+   * Faltaba, y era el agujero por el que se colaba "hoy paga: nadie, por ahora".
+   * El pagador del día lo resuelve el servidor como «quien recogió, salvo
+   * corrección manual», así que mientras no hubiera fila de sorteo no había
+   * acreedor. Y la única forma de crear esa fila era la máquina, que exige dos
+   * personas y elige al azar: el caso normal —alguien dice "voy yo"— no dejaba
+   * rastro y la cuenta se quedaba sin dueño para siempre.
+   *
+   * El endpoint ya existía para corregir días pasados desde el histórico. Se
+   * difunde con announce:true, así que actualiza el cartel en todas las
+   * pantallas sin abrirle la tragaperras a nadie, y el pagador va detrás solo.
+   */
+  async function setWinner(name) {
+    const person = (name || '').trim()
+    if (!person) return
+    try {
+      await api.setDrawWinner(todayKey(), person)
+      winner.value = { name: person, at: Date.now() }
+      loadOdds() // acaba de cambiar el reparto de papeletas
+    } catch (e) {
+      notifyError(`No se ha podido apuntar que recoge ${person}`, e)
+    }
+  }
+
   function closeDraw() {
     open.value = false
     draw.value = null
   }
 
-  return { open, round, draw, winner, odds, openMachine, confirmDraw, closeDraw, loadOdds, toggleAvailable }
+  return {
+    open, round, draw, winner, odds,
+    openMachine, confirmDraw, closeDraw, loadOdds, toggleAvailable, setWinner,
+  }
 }

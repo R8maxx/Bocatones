@@ -136,133 +136,131 @@ onBeforeUnmount(() => {
 </script>
 
 <template>
-  <Teleport to="body">
-    <div class="slot-overlay" @click.self="emit('close')">
-      <div class="rig">
-        <div
-          ref="cabinet"
-          class="cabinet"
-          :class="{ won: phase === 'done' }"
-          role="dialog"
-          aria-modal="true"
-          aria-labelledby="slot-title"
-          tabindex="-1"
-        >
-          <button class="x" type="button" aria-label="cerrar" @click="emit('close')">✕</button>
+  <div class="slot-overlay" @click.self="emit('close')">
+    <div class="rig">
+      <div
+        ref="cabinet"
+        class="cabinet"
+        :class="{ won: phase === 'done' }"
+        role="dialog"
+        aria-modal="true"
+        aria-labelledby="slot-title"
+        tabindex="-1"
+      >
+        <button class="x" type="button" aria-label="cerrar" @click="emit('close')">✕</button>
 
-          <!-- tornillos del chasis -->
-          <span class="screw tl" aria-hidden="true" />
-          <span class="screw tr" aria-hidden="true" />
-          <span class="screw bl" aria-hidden="true" />
-          <span class="screw br" aria-hidden="true" />
+        <!-- tornillos del chasis -->
+        <span class="screw tl" aria-hidden="true" />
+        <span class="screw tr" aria-hidden="true" />
+        <span class="screw bl" aria-hidden="true" />
+        <span class="screw br" aria-hidden="true" />
 
-          <!-- marquesina con bombillas -->
-          <div class="topper">
-            <span class="bulbs" aria-hidden="true">
-              <i v-for="n in 8" :key="n" :style="{ '--i': n }" />
-            </span>
-            <h3 id="slot-title"><span aria-hidden="true">🍀</span> ¿QUIÉN RECOGE? <span aria-hidden="true">🍀</span></h3>
-            <span class="bulbs" aria-hidden="true">
-              <i v-for="n in 8" :key="n" :style="{ '--i': n }" />
-            </span>
-          </div>
-
-          <!-- rayas arcade -->
-          <div class="rails" aria-hidden="true"><span /><span /><span /></div>
-
-          <div class="console">
-            <div class="reels-frame">
-              <div class="reels" :class="{ spinning: phase === 'spinning' }">
-                <div class="payline" aria-hidden="true" />
-                <div v-for="(reel, i) in reels" :key="i" class="reel">
-                  <div
-                    class="strip"
-                    :style="{
-                      transform: `translateY(-${translated ? reel.offset : 0}px)`,
-                      transitionDuration: reducedMotion ? '0ms' : reel.duration + 'ms',
-                    }"
-                  >
-                    <div v-for="(name, j) in reel.strip" :key="j" class="cell">
-                      <span class="cell-emoji">{{ personEmoji(name) }}</span>
-                      <span class="cell-name">{{ name }}</span>
-                    </div>
-                  </div>
-                </div>
-                <!-- reflejo del cristal + escáner CRT sobre los rodillos -->
-                <div class="glass" aria-hidden="true" />
-              </div>
-            </div>
-
-            <!-- bandeja de premios -->
-            <div class="tray">
-              <Transition name="winner" mode="out-in">
-                <div v-if="phase === 'done'" key="done" class="result" aria-live="polite">
-                  <div class="result-emoji">{{ winnerEmoji }}</div>
-                  <div class="result-text">
-                    <p class="result-lbl">// hoy recoge</p>
-                    <p class="result-name">{{ draw.winner }}</p>
-                  </div>
-                  <div class="result-actions">
-                    <button class="again" type="button" @click="emit('again')">🎰 otra vez</button>
-                    <button class="ok" type="button" @click="emit('close')">de acuerdo</button>
-                  </div>
-                </div>
-                <p v-else-if="armed || phase === 'spinning'" key="spin" class="tray-hint">▘▙ girando… ▟▝</p>
-                <div v-else key="ready" class="ready">
-                  <p v-if="canPull" class="tray-hint blink-hint">↓ tira de la palanca ↓</p>
-                  <p v-else class="tray-hint warn">
-                    hacen falta 2 que puedan ir
-                  </p>
-                  <!-- papeletas a la vista: quien menos ha ido, más probabilidad.
-                       Cada fila se puede pulsar para marcar que hoy no puede ir. -->
-                  <ul v-if="oddsList.length" class="odds" aria-label="probabilidades del sorteo">
-                    <li v-for="o in oddsList" :key="o.name">
-                      <button
-                        type="button"
-                        class="odd"
-                        :class="{ away: o.available === false, mine: isMe(o.name) }"
-                        :aria-pressed="o.available !== false"
-                        :title="o.available === false ? `${o.name} no puede ir hoy — pulsa para volver a incluirle` : `${o.name} entra en el sorteo — pulsa si hoy no puede ir`"
-                        @click="emit('toggle', o.name)"
-                      >
-                        <span class="odd-name">{{ personEmoji(o.name) }} {{ o.name }}</span>
-                        <span v-if="o.available === false" class="odd-away">no puede</span>
-                        <template v-else>
-                          <span class="odd-bar" aria-hidden="true">
-                            <span class="odd-fill" :style="{ '--fill': o.chance }" />
-                          </span>
-                          <span class="odd-pct">{{ Math.round(o.chance * 100) }}%</span>
-                        </template>
-                        <span class="odd-gone">{{ o.gone }}× ido</span>
-                      </button>
-                    </li>
-                  </ul>
-                  <p v-if="oddsList.length" class="odds-hint">
-                    pulsa a quien hoy no pueda ir<template v-if="awayCount"> · {{ awayCount }} fuera</template>
-                  </p>
-                </div>
-              </Transition>
-            </div>
-          </div>
+        <!-- marquesina con bombillas -->
+        <div class="topper">
+          <span class="bulbs" aria-hidden="true">
+            <i v-for="n in 8" :key="n" :style="{ '--i': n }" />
+          </span>
+          <h3 id="slot-title"><span aria-hidden="true">🍀</span> ¿QUIÉN RECOGE? <span aria-hidden="true">🍀</span></h3>
+          <span class="bulbs" aria-hidden="true">
+            <i v-for="n in 8" :key="n" :style="{ '--i': n }" />
+          </span>
         </div>
 
-        <!-- palanca EXTERNA accionable: tírala para girar -->
-        <button
-          class="lever"
-          type="button"
-          :class="{ pulled: armed, ready: phase === 'ready' && !armed }"
-          :aria-label="phase === 'ready' && !armed ? 'Tirar de la palanca para girar' : 'palanca'"
-          @click="pull"
-        >
-          <span class="lever-mount" />
-          <span class="lever-arm">
-            <span class="lever-rod" />
-            <span class="lever-ball" />
-          </span>
-        </button>
+        <!-- rayas arcade -->
+        <div class="rails" aria-hidden="true"><span /><span /><span /></div>
+
+        <div class="console">
+          <div class="reels-frame">
+            <div class="reels" :class="{ spinning: phase === 'spinning' }">
+              <div class="payline" aria-hidden="true" />
+              <div v-for="(reel, i) in reels" :key="i" class="reel">
+                <div
+                  class="strip"
+                  :style="{
+                    transform: `translateY(-${translated ? reel.offset : 0}px)`,
+                    transitionDuration: reducedMotion ? '0ms' : reel.duration + 'ms',
+                  }"
+                >
+                  <div v-for="(name, j) in reel.strip" :key="j" class="cell">
+                    <span class="cell-emoji">{{ personEmoji(name) }}</span>
+                    <span class="cell-name">{{ name }}</span>
+                  </div>
+                </div>
+              </div>
+              <!-- reflejo del cristal + escáner CRT sobre los rodillos -->
+              <div class="glass" aria-hidden="true" />
+            </div>
+          </div>
+
+          <!-- bandeja de premios -->
+          <div class="tray">
+            <Transition name="winner" mode="out-in">
+              <div v-if="phase === 'done'" key="done" class="result" aria-live="polite">
+                <div class="result-emoji">{{ winnerEmoji }}</div>
+                <div class="result-text">
+                  <p class="result-lbl">// hoy recoge</p>
+                  <p class="result-name">{{ draw.winner }}</p>
+                </div>
+                <div class="result-actions">
+                  <button class="again" type="button" @click="emit('again')">🎰 otra vez</button>
+                  <button class="ok" type="button" @click="emit('close')">de acuerdo</button>
+                </div>
+              </div>
+              <p v-else-if="armed || phase === 'spinning'" key="spin" class="tray-hint">▘▙ girando… ▟▝</p>
+              <div v-else key="ready" class="ready">
+                <p v-if="canPull" class="tray-hint blink-hint">↓ tira de la palanca ↓</p>
+                <p v-else class="tray-hint warn">
+                  hacen falta 2 que puedan ir
+                </p>
+                <!-- papeletas a la vista: quien menos ha ido, más probabilidad.
+                     Cada fila se puede pulsar para marcar que hoy no puede ir. -->
+                <ul v-if="oddsList.length" class="odds" aria-label="probabilidades del sorteo">
+                  <li v-for="o in oddsList" :key="o.name">
+                    <button
+                      type="button"
+                      class="odd"
+                      :class="{ away: o.available === false, mine: isMe(o.name) }"
+                      :aria-pressed="o.available !== false"
+                      :title="o.available === false ? `${o.name} no puede ir hoy — pulsa para volver a incluirle` : `${o.name} entra en el sorteo — pulsa si hoy no puede ir`"
+                      @click="emit('toggle', o.name)"
+                    >
+                      <span class="odd-name">{{ personEmoji(o.name) }} {{ o.name }}</span>
+                      <span v-if="o.available === false" class="odd-away">no puede</span>
+                      <template v-else>
+                        <span class="odd-bar" aria-hidden="true">
+                          <span class="odd-fill" :style="{ '--fill': o.chance }" />
+                        </span>
+                        <span class="odd-pct">{{ Math.round(o.chance * 100) }}%</span>
+                      </template>
+                      <span class="odd-gone">{{ o.gone }}× ido</span>
+                    </button>
+                  </li>
+                </ul>
+                <p v-if="oddsList.length" class="odds-hint">
+                  pulsa a quien hoy no pueda ir<template v-if="awayCount"> · {{ awayCount }} fuera</template>
+                </p>
+              </div>
+            </Transition>
+          </div>
+        </div>
       </div>
+
+      <!-- palanca EXTERNA accionable: tírala para girar -->
+      <button
+        class="lever"
+        type="button"
+        :class="{ pulled: armed, ready: phase === 'ready' && !armed }"
+        :aria-label="phase === 'ready' && !armed ? 'Tirar de la palanca para girar' : 'palanca'"
+        @click="pull"
+      >
+        <span class="lever-mount" />
+        <span class="lever-arm">
+          <span class="lever-rod" />
+          <span class="lever-ball" />
+        </span>
+      </button>
     </div>
-  </Teleport>
+  </div>
 </template>
 
 <style scoped>
@@ -275,9 +273,7 @@ onBeforeUnmount(() => {
   padding: 1rem;
   background: radial-gradient(120% 120% at 50% 0%, rgba(0, 0, 0, 0.78), rgba(0, 0, 0, 0.92));
   backdrop-filter: blur(4px);
-  animation: fade 0.25s ease both;
 }
-@keyframes fade { from { opacity: 0; } }
 
 /* paleta derivada del TEMA (color solo en movimiento: luces + victoria)
  *

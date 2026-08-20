@@ -116,6 +116,21 @@
   --z-toast: 1000;
   --z-modal: 1200;
   --z-crt: 9999;
+
+  /* ----------------------------------------------------------------
+     Movimiento. Era lo unico del sistema que seguia suelto: los mismos
+     cuatro tiempos y las mismas tres curvas estaban copiados a mano por
+     una veintena de ficheros, asi que dos cosas que aparecen juntas se
+     movian a velocidades distintas. Aqui viven una sola vez.
+     ---------------------------------------------------------------- */
+  --dur-1: 120ms;   /* color de hover                        */
+  --dur-2: 200ms;   /* micro: chips, insignias               */
+  --dur-3: 280ms;   /* entradas/salidas normales             */
+  --dur-4: 420ms;   /* paneles grandes, cambio de vista      */
+  --ease-out:   cubic-bezier(0.2, 0.8, 0.2, 1);
+  --ease-inout: cubic-bezier(0.2, 0.9, 0.2, 1);
+  --ease-pop:   cubic-bezier(0.2, 1.5, 0.4, 1);
+  --stagger: 45ms;
 }
 
 *,
@@ -210,6 +225,14 @@ body::after {
   li:hover, .row:hover, .d-row:hover, .pick-card:hover, .sw:hover, .x:hover {
     transform: none !important;
   }
+  /*
+   * Las salidas son lo que hay que vigilar aquí. Con la duración a cero Vue
+   * sigue quitando el elemento por el evento de fin de transición, pero el
+   * estado final no debe dejar rastro: nada de elementos invisibles ocupando
+   * sitio ni de un detalle plegado a 0fr que se quede montado.
+   */
+  .collapse-enter-from, .collapse-leave-to { grid-template-rows: 1fr !important; opacity: 1 !important; }
+  .list-leave-active, .chip-leave-active, .rise-leave-active { position: static !important; }
 }
 
 ::selection {
@@ -236,3 +259,106 @@ body::after {
 button:active:not(:disabled) {
   transform: translateY(1px);
 }
+
+/* ----------------------------------------------------------------
+   Vocabulario de movimiento compartido.
+
+   Vive aquí y NO en un <style scoped> a propósito: las clases que genera
+   <Transition name="x"> se aplican al hijo, que casi siempre es otro
+   componente, así que un estilo scoped del padre no las alcanzaría.
+
+   Regla de la casa, ya aprendida en OrderList: se anima SOLO opacity y
+   transform. Nunca `all`, que arrastraba height/margin/padding y hacía
+   reflow de la lista entera en cada alta o baja.
+   ---------------------------------------------------------------- */
+
+/* fade — lo mínimo: aparecer y desaparecer sin desplazamiento */
+.fade-enter-active,
+.fade-leave-active { transition: opacity var(--dur-3) var(--ease-out); }
+.fade-enter-from,
+.fade-leave-to { opacity: 0; }
+
+/* rise — entra desde abajo. Para elementos SUELTOS (un aviso, una fila que
+   aparece por su cuenta). Se queda en el flujo al salir: aquí no hay vecinos
+   a los que estorbar, y sacarlo del flujo lo haría solaparse con lo de abajo. */
+.rise-enter-active { transition: opacity var(--dur-3) var(--ease-out), transform var(--dur-3) var(--ease-out); }
+.rise-leave-active { transition: opacity var(--dur-2) var(--ease-out), transform var(--dur-2) var(--ease-out); }
+.rise-enter-from { opacity: 0; transform: translateY(8px); }
+.rise-leave-to { opacity: 0; transform: translateY(-4px); }
+
+/* list — el mismo gesto pero para <TransitionGroup>. La diferencia importa:
+   quien se va sale del flujo (position: absolute) para que los que quedan
+   puedan deslizarse a su sitio con -move en vez de dar un tirón seco. */
+.list-enter-active { transition: opacity var(--dur-3) var(--ease-out), transform var(--dur-3) var(--ease-out); }
+.list-leave-active { transition: opacity var(--dur-2) var(--ease-out), transform var(--dur-2) var(--ease-out); position: absolute; }
+.list-enter-from { opacity: 0; transform: translateY(8px); }
+.list-leave-to { opacity: 0; transform: translateY(-4px); }
+.list-move { transition: transform var(--dur-3) var(--ease-out); }
+
+/* pop — para lo pequeño que debe llamar la atención: chips e insignias */
+.pop-enter-active { transition: opacity var(--dur-2) var(--ease-pop), transform var(--dur-2) var(--ease-pop); }
+.pop-leave-active { transition: opacity var(--dur-1) var(--ease-out), transform var(--dur-1) var(--ease-out); }
+.pop-enter-from,
+.pop-leave-to { opacity: 0; transform: scale(0.82); }
+
+/* chip — pop en versión lista (los habituales y los clásicos del formulario) */
+.chip-enter-active { transition: opacity var(--dur-2) var(--ease-pop), transform var(--dur-2) var(--ease-pop); }
+.chip-leave-active { transition: opacity var(--dur-1) var(--ease-out), transform var(--dur-1) var(--ease-out); position: absolute; }
+.chip-enter-from,
+.chip-leave-to { opacity: 0; transform: scale(0.8); }
+.chip-move { transition: transform var(--dur-2) var(--ease-out); }
+
+/* swap — relevo entre dos estados del MISMO sitio (texto ↔ selector,
+   fila ↔ edición, hoy ↔ histórico). Siempre con mode="out-in": si los dos
+   conviven un instante, el contenedor pega un salto de altura. */
+.swap-enter-active { transition: opacity var(--dur-2) var(--ease-out), transform var(--dur-2) var(--ease-out); }
+.swap-leave-active { transition: opacity var(--dur-1) var(--ease-out), transform var(--dur-1) var(--ease-out); }
+.swap-enter-from { opacity: 0; transform: translateY(4px); }
+.swap-leave-to { opacity: 0; transform: translateY(-4px); }
+
+/* view — el relevo grande de hoy ↔ histórico, con algo más de recorrido */
+.view-enter-active { transition: opacity var(--dur-3) var(--ease-out), transform var(--dur-3) var(--ease-out); }
+.view-leave-active { transition: opacity var(--dur-2) var(--ease-out), transform var(--dur-2) var(--ease-out); }
+.view-enter-from { opacity: 0; transform: translateY(10px); }
+.view-leave-to { opacity: 0; transform: translateY(-6px); }
+
+/*
+ * collapse — desplegar y plegar a la altura REAL del contenido.
+ *
+ * El truco es grid-template-rows: 0fr → 1fr. Es la única forma de animar
+ * "hasta lo que mida" sin medir con JavaScript ni inventarse un max-height
+ * que, si se queda corto, recorta el contenido, y si se pasa, hace que el
+ * plegado empiece con un tramo muerto.
+ *
+ * El hijo directo necesita min-height: 0 y overflow: hidden, o se niega a
+ * encogerse por debajo de su contenido.
+ */
+.collapse-enter-active,
+.collapse-leave-active {
+  display: grid;
+  grid-template-rows: 1fr;
+  transition: grid-template-rows var(--dur-3) var(--ease-out), opacity var(--dur-3) var(--ease-out);
+}
+.collapse-enter-active > *,
+.collapse-leave-active > * {
+  min-height: 0;
+  overflow: hidden;
+}
+.collapse-enter-from,
+.collapse-leave-to { grid-template-rows: 0fr; opacity: 0; }
+
+/* modal — scrim y panel. La entrada estaba en cada componente como
+   @keyframes, pero App.vue los desmontaba con un v-if pelado, así que
+   entraban animados y desaparecían de golpe. Ahora entra y sale por aquí. */
+.modal-enter-active { transition: opacity var(--dur-2) var(--ease-out); }
+/* mientras se desvanece sigue en el DOM: sin esto se le puede volver a hacer
+   clic durante la salida y se dispara dos veces la misma acción */
+.modal-leave-active { transition: opacity var(--dur-2) var(--ease-out); pointer-events: none; }
+.modal-enter-from,
+.modal-leave-to { opacity: 0; }
+/* el panel de dentro se mueve un poco más que el velo, para que se lea
+   como una sola pieza que entra, no como dos capas independientes */
+.modal-enter-active .modal-panel { transition: opacity var(--dur-3) var(--ease-inout), transform var(--dur-3) var(--ease-inout); }
+.modal-leave-active .modal-panel { transition: opacity var(--dur-2) var(--ease-out), transform var(--dur-2) var(--ease-out); }
+.modal-enter-from .modal-panel { opacity: 0; transform: translateY(12px) scale(0.98); }
+.modal-leave-to .modal-panel { opacity: 0; transform: translateY(6px) scale(0.99); }

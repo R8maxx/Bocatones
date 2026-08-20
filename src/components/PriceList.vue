@@ -62,82 +62,82 @@ const autoHalf = (c) => (c.priceWhole === null ? '' : toInput(Math.round(c.price
 </script>
 
 <template>
-  <Teleport to="body">
+  <div
+    class="pl-overlay"
+    @click.self="emit('close')"
+  >
     <div
-      class="pl-overlay"
-      @click.self="emit('close')"
+      ref="panel"
+      class="pl-panel modal-panel"
+      role="dialog"
+      aria-modal="true"
+      aria-labelledby="pl-title"
+      tabindex="-1"
     >
-      <div
-        ref="panel"
-        class="pl-panel"
-        role="dialog"
-        aria-modal="true"
-        aria-labelledby="pl-title"
-        tabindex="-1"
-      >
-        <div class="pl-head">
-          <h3 id="pl-title"><span class="hash">#</span> precios del catálogo</h3>
-          <button class="pl-x" type="button" aria-label="cerrar" @click="emit('close')">✕</button>
-        </div>
-
-        <p class="pl-note">
-          Es el precio que se autorellena al pedir. Cada pedido guarda el importe que se le
-          aplicó, así que cambiar esto <b>no altera el histórico</b>.
-        </p>
-
-        <p v-if="failed" class="pl-error" role="alert">⚠ {{ failed }}</p>
-
-        <div v-if="classics.length" class="pl-cols" aria-hidden="true">
-          <span>relleno</span>
-          <span>🥖 entero</span>
-          <span>½ media</span>
-        </div>
-
-        <ul class="pl-rows">
-          <li v-for="c in classics" :key="c.id" class="pl-row">
-            <span class="pl-name">{{ c.name }}</span>
-            <span class="pl-money" :class="{ busy: saving === c.id }">
-              <input
-                v-model="drafts[c.id].whole"
-                type="text"
-                inputmode="decimal"
-                maxlength="7"
-                placeholder="—"
-                :aria-label="`precio del entero de ${c.name}`"
-                @change="save(c, 'whole')"
-                @blur="save(c, 'whole')"
-              />
-              <span class="pl-cur" aria-hidden="true">€</span>
-            </span>
-            <span class="pl-money" :class="{ busy: saving === c.id }">
-              <input
-                v-model="drafts[c.id].half"
-                type="text"
-                inputmode="decimal"
-                maxlength="7"
-                :placeholder="autoHalf(c) || '—'"
-                :title="c.priceHalf === null && c.priceWhole !== null ? 'mitad del entero (automático)' : ''"
-                :aria-label="`precio de la media de ${c.name}`"
-                @change="save(c, 'half')"
-                @blur="save(c, 'half')"
-              />
-              <span class="pl-cur" aria-hidden="true">€</span>
-            </span>
-          </li>
-        </ul>
-
-        <p v-if="loading && !classics.length" class="pl-empty">cargando catálogo…</p>
-        <p v-else-if="!classics.length" class="pl-empty">
-          Todavía no hay clásicos. Guarda alguno desde el formulario de pedido.
-        </p>
-
-        <p class="pl-hint">// media en blanco = la mitad del entero, redondeada</p>
+      <div class="pl-head">
+        <h3 id="pl-title"><span class="hash">#</span> precios del catálogo</h3>
+        <button class="pl-x" type="button" aria-label="cerrar" @click="emit('close')">✕</button>
       </div>
+
+      <p class="pl-note">
+        Es el precio que se autorellena al pedir. Cada pedido guarda el importe que se le
+        aplicó, así que cambiar esto <b>no altera el histórico</b>.
+      </p>
+
+      <p v-if="failed" class="pl-error" role="alert">⚠ {{ failed }}</p>
+
+      <div v-if="classics.length" class="pl-cols" aria-hidden="true">
+        <span>relleno</span>
+        <span>🥖 entero</span>
+        <span>½ media</span>
+      </div>
+
+      <ul class="pl-rows">
+        <li v-for="c in classics" :key="c.id" class="pl-row">
+          <span class="pl-name">{{ c.name }}</span>
+          <span class="pl-money" :class="{ busy: saving === c.id }">
+            <input
+              v-model="drafts[c.id].whole"
+              type="text"
+              inputmode="decimal"
+              maxlength="7"
+              placeholder="—"
+              :aria-label="`precio del entero de ${c.name}`"
+              @change="save(c, 'whole')"
+              @blur="save(c, 'whole')"
+            />
+            <span class="pl-cur" aria-hidden="true">€</span>
+          </span>
+          <span class="pl-money" :class="{ busy: saving === c.id }">
+            <input
+              v-model="drafts[c.id].half"
+              type="text"
+              inputmode="decimal"
+              maxlength="7"
+              :placeholder="autoHalf(c) || '—'"
+              :title="c.priceHalf === null && c.priceWhole !== null ? 'mitad del entero (automático)' : ''"
+              :aria-label="`precio de la media de ${c.name}`"
+              @change="save(c, 'half')"
+              @blur="save(c, 'half')"
+            />
+            <span class="pl-cur" aria-hidden="true">€</span>
+          </span>
+        </li>
+      </ul>
+
+      <p v-if="loading && !classics.length" class="pl-empty">cargando catálogo…</p>
+      <p v-else-if="!classics.length" class="pl-empty">
+        Todavía no hay clásicos. Guarda alguno desde el formulario de pedido.
+      </p>
+
+      <p class="pl-hint">// media en blanco = la mitad del entero, redondeada</p>
     </div>
-  </Teleport>
+  </div>
 </template>
 
 <style scoped>
+/* la entrada y la salida las pone el <Transition name="modal"> de App.vue:
+   antes entraba con @keyframes y se desmontaba de golpe, sin salida */
 .pl-overlay {
   position: fixed;
   inset: 0;
@@ -147,9 +147,7 @@ const autoHalf = (c) => (c.priceWhole === null ? '' : toInput(Math.round(c.price
   padding: clamp(0.8rem, 3vw, 2rem);
   background: var(--scrim);
   backdrop-filter: blur(3px);
-  animation: fade 0.2s ease;
 }
-@keyframes fade { from { opacity: 0; } }
 
 .pl-panel:focus { outline: none; }
 .pl-panel {
@@ -161,9 +159,7 @@ const autoHalf = (c) => (c.priceWhole === null ? '' : toInput(Math.round(c.price
   border-radius: var(--radius);
   padding: clamp(1rem, 3vw, 1.6rem);
   box-shadow: var(--hairline), var(--shadow-lg);
-  animation: rise 0.24s cubic-bezier(0.2, 0.9, 0.2, 1);
 }
-@keyframes rise { from { opacity: 0; transform: translateY(10px); } }
 
 .pl-head {
   display: flex;

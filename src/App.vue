@@ -17,6 +17,8 @@ import { fmt } from './money.js'
 import { confirmSettle, confirmCollect } from './composables/useSettle.js'
 import { usePayer } from './composables/usePayer.js'
 import { useMe } from './composables/useMe.js'
+import { usePeople } from './composables/usePeople.js'
+import { useInlineEdit } from './composables/useInlineEdit.js'
 import { rtStatus, isOnline } from './realtime.js'
 import { confirm, useConfirm } from './composables/useConfirm.js'
 
@@ -46,17 +48,29 @@ const {
 // quién pone el dinero hoy: por defecto quien recoge, corregible a mano
 const { payer, setPayer } = usePayer()
 
-// corrector del pagador: mismo patrón que el «✎ corregir» del histórico
-// (texto → botón → select), para que se aprenda una sola vez
-const editingPayer = ref(false)
-function choosePayer(e) {
-  editingPayer.value = false
-  setPayer(e.target.value) // '' = volver a seguir al sorteo
-}
-
 // sorteo de quién recoge los bocatas (ponderado: quien menos ha ido, más papeletas)
-const { open: slotOpen, round: slotRound, draw, winner, odds, openMachine, confirmDraw, closeDraw, toggleAvailable } =
-  useDraw()
+const {
+  open: slotOpen, round: slotRound, draw, winner, odds,
+  openMachine, confirmDraw, closeDraw, toggleAvailable, setWinner,
+} = useDraw()
+
+/*
+ * Los dos correctores en línea de la tarjeta de la cuenta. Comparten
+ * useInlineEdit porque compartían también el fallo: se abrían con un booleano
+ * y sólo el evento `change` los cerraba, así que abrir el desplegable por
+ * curiosidad te obligaba a cambiar el pagador para poder salir.
+ */
+const {
+  editing: editingPayer, el: payerSel, open: openPayerEdit,
+  cancel: cancelPayerEdit, blur: blurPayerEdit, choose: pickPayer,
+} = useInlineEdit()
+const {
+  editing: editingPicker, el: pickerSel, open: openPickerEdit,
+  cancel: cancelPickerEdit, blur: blurPickerEdit, choose: pickPicker,
+} = useInlineEdit()
+
+const choosePayer = (e) => pickPayer(e, setPayer) // '' = volver a seguir al sorteo
+const choosePicker = (e) => pickPicker(e, setWinner)
 
 /*
  * Barra compacta. La cabecera se comía el 54% de la primera pantalla y la cola
@@ -134,6 +148,16 @@ const people = computed(() => {
   return out
 })
 const canDraw = computed(() => people.value.length >= 2)
+
+/*
+ * Para ELEGIR a alguien a mano no vale la lista de arriba: sólo mira los
+ * pedidos de hoy. Un día con deuda arrastrada pero todavía sin pedidos dejaba
+ * el desplegable sin una sola opción, y un <select> vacío no se puede usar ni
+ * cerrar. Los de hoy van primero, que son los candidatos probables; detrás, el
+ * resto de conocidos.
+ */
+const { withKnown } = usePeople()
+const pickable = computed(() => withKnown(people.value))
 
 // aviso emergente cuando alguien añade o quita un pedido
 const ADD_PHRASES = [
@@ -287,13 +311,17 @@ async function copyList() {
     <Teleport to="body">
       <div class="stickybar" :class="{ show: compact }">
         <span class="sb-brand">&lt;BOCATONES/&gt;</span>
-        <span v-if="winner" class="sb-who">
-          <span aria-hidden="true">{{ personEmoji(winner.name) }}</span>
-          recoge <b>{{ winner.name }}</b>
-        </span>
-        <span v-if="dayPending" class="sb-due">
-          sin pagar <MoneyValue :cents="dayPending" />
-        </span>
+        <Transition name="pop">
+          <span v-if="winner" class="sb-who">
+            <span aria-hidden="true">{{ personEmoji(winner.name) }}</span>
+            recoge <b>{{ winner.name }}</b>
+          </span>
+        </Transition>
+        <Transition name="pop">
+          <span v-if="dayPending" class="sb-due">
+            sin pagar <MoneyValue :cents="dayPending" />
+          </span>
+        </Transition>
         <span
           v-if="iOweTotal"
           class="sb-owe"
@@ -311,21 +339,72 @@ async function copyList() {
     </Teleport>
 
     <main>
-    <template v-if="view === 'today'">
+    <!--
+      Relevo hoy ↔ histórico. Va con mode="out-in" a propósito: si las dos
+      vistas conviven un instante, el <main> pega un salto de altura enorme.
+    -->
+    <Transition name="view" mode="out-in">
+    <div v-if="view === 'today'" key="today" class="view-today">
     <div class="layout">
       <section class="col-form" aria-label="Nuevo pedido">
         <OrderForm @add="onAdd" />
       </section>
 
       <aside class="col-stats">
-        <button v-if="winner" class="pick-card" type="button" title="Volver a sortear" @click="openMachine">
+        <!--
+          Quién recoge. Antes esta tarjeta sólo existía DESPUÉS de sortear, y su
+          único gesto era volver a sortear. Como el pagador del día sale de aquí,
+          el grupo que no usa la tragaperras —alguien dice "voy yo"— se quedaba
+          sin nadie a quien deber el dinero. Ahora también se puede decir a mano.
+        -->
+        <div class="pick-card" :class="{ empty: !winner }">
           <span class="pick-lbl">// hoy recoge</span>
-          <span class="pick-who">
-            <span class="pick-emoji" aria-hidden="true">{{ personEmoji(winner.name) }}</span>
-            <span class="pick-name">{{ winner.name }}</span>
-          </span>
-          <span class="pick-hint">🎰 sortear de nuevo</span>
-        </button>
+
+          <Transition name="swap" mode="out-in">
+            <span v-if="editingPicker" key="edit" class="pick-edit">
+              <select
+                ref="pickerSel"
+                class="pay-sel"
+                aria-label="quién recoge hoy"
+                :value="winner ? winner.name : ''"
+                @change="choosePicker"
+                @keydown.esc.stop.prevent="cancelPickerEdit()"
+                @blur="blurPickerEdit()"
+              >
+                <option value="" disabled>— elige quién va —</option>
+                <option v-for="p in pickable" :key="p" :value="p">{{ p }}</option>
+              </select>
+              <button class="pay-x" type="button" title="Dejarlo como estaba" @click="cancelPickerEdit()">✕</button>
+            </span>
+
+            <span v-else key="show" class="pick-body">
+              <span class="pick-who">
+                <span class="pick-emoji" aria-hidden="true">{{ winner ? personEmoji(winner.name) : '❔' }}</span>
+                <span class="pick-name">{{ winner ? winner.name : 'nadie aún' }}</span>
+              </span>
+              <span class="pick-acts">
+                <button
+                  class="pick-btn"
+                  type="button"
+                  :disabled="!canDraw"
+                  :title="canDraw ? 'Sortear quién recoge los bocatas' : 'Hacen falta al menos 2 personas distintas'"
+                  @click="openMachine"
+                >
+                  🎰 {{ winner ? 'sortear de nuevo' : 'sortear' }}
+                </button>
+                <button
+                  class="pick-btn"
+                  type="button"
+                  :disabled="!pickable.length"
+                  title="Apuntar a mano quién va, sin sortear"
+                  @click="openPickerEdit()"
+                >
+                  ✎ {{ winner ? 'cambiar' : 'lo digo yo' }}
+                </button>
+              </span>
+            </span>
+          </Transition>
+        </div>
 
         <div class="stat-card">
           <div class="stat-num">{{ String(count).padStart(2, '0') }}</div>
@@ -339,22 +418,36 @@ async function copyList() {
           <!-- quién pone el dinero hoy: por defecto quien recoge, corregible -->
           <div class="pay-row">
             <span class="pay-lbl">hoy paga</span>
-            <template v-if="!editingPayer">
-              <span class="pay-who">
-                <span class="pay-emoji" aria-hidden="true">{{ payer ? personEmoji(payer.name) : '❔' }}</span>
-                <span class="pay-txt">
-                  <span class="pay-name">{{ payer ? payer.name : 'nadie, por ahora' }}</span>
-                  <small v-if="payer?.source === 'draw'" class="pay-src">// quien recoge</small>
-                  <small v-else-if="payer" class="pay-src">// fijado a mano</small>
-                  <small v-else class="pay-src">// nadie ha puesto el dinero</small>
-                </span>
+            <Transition name="swap" mode="out-in">
+              <span v-if="editingPayer" key="edit" class="pay-edit">
+                <select
+                  ref="payerSel"
+                  class="pay-sel"
+                  aria-label="quién pone el dinero hoy"
+                  :value="payer?.source === 'manual' ? payer.name : ''"
+                  @change="choosePayer"
+                  @keydown.esc.stop.prevent="cancelPayerEdit()"
+                  @blur="blurPayerEdit()"
+                >
+                  <option value="">— quien recoja (automático) —</option>
+                  <option v-for="p in pickable" :key="p" :value="p">{{ p }}</option>
+                </select>
+                <button class="pay-x" type="button" title="Dejarlo como estaba" @click="cancelPayerEdit()">✕</button>
               </span>
-              <button class="pay-fix" type="button" @click="editingPayer = true">✎ cambiar</button>
-            </template>
-            <select v-else class="pay-sel" aria-label="quién pone el dinero hoy" @change="choosePayer">
-              <option value="">— que lo diga el sorteo —</option>
-              <option v-for="p in people" :key="p" :value="p">{{ p }}</option>
-            </select>
+
+              <span v-else key="show" class="pay-show">
+                <span class="pay-who">
+                  <span class="pay-emoji" aria-hidden="true">{{ payer ? personEmoji(payer.name) : '❔' }}</span>
+                  <span class="pay-txt">
+                    <span class="pay-name">{{ payer ? payer.name : 'nadie, por ahora' }}</span>
+                    <small v-if="payer?.source === 'draw'" class="pay-src">// quien recoge</small>
+                    <small v-else-if="payer" class="pay-src">// fijado a mano</small>
+                    <small v-else class="pay-src">// apunta arriba quién recoge</small>
+                  </span>
+                </span>
+                <button class="pay-fix" type="button" @click="openPayerEdit()">✎ cambiar</button>
+              </span>
+            </Transition>
           </div>
 
           <div v-if="count" class="money-today">
@@ -374,6 +467,7 @@ async function copyList() {
 
           <!-- tu posición en la cuenta: con nombre y apellidos, no un total ciego -->
           <div v-if="iOwe.length || owedToMe.length || myUnmarked.length" class="mine-money">
+            <TransitionGroup name="list">
             <p v-for="r in iOwe" :key="'owe-' + r.creditorKey" class="mm-row owe">
               <span>debes <MoneyValue :cents="r.pending" /> a</span>
               <span class="mm-emoji" aria-hidden="true">{{ personEmoji(r.creditor) }}</span>
@@ -390,13 +484,14 @@ async function copyList() {
               <span>pusiste el dinero: tu <MoneyValue :cents="r.pending" /> sigue sin marcar</span>
               <button class="mm-btn" type="button" @click="askCollect(r)">✓ marcar</button>
             </p>
+            </TransitionGroup>
           </div>
 
           <div v-if="debts.length" class="debts">
             <h3 class="debts-head">
               deuda acumulada <span class="debts-total"><MoneyValue :cents="debtTotal" /></span>
             </h3>
-            <ul>
+            <TransitionGroup name="list" tag="ul">
               <li v-for="d in debts" :key="d.key" class="debt-row" :class="{ mine: isMe(d.name) }">
                 <span class="debt-who">
                   <span class="debt-emoji" aria-hidden="true">{{ personEmoji(d.name) }}</span>
@@ -416,11 +511,13 @@ async function copyList() {
                   @click="askSettle(d.name, d.pending)"
                 ><MoneyValue :cents="d.pending" /></button>
               </li>
-            </ul>
+            </TransitionGroup>
             <p class="debts-hint">// pulsa el importe para saldar</p>
-            <p v-if="orphanTotal" class="debts-orphan">
-              ⚠ <MoneyValue :cents="orphanTotal" /> de días sin pagador — apunta quién puso el dinero
-            </p>
+            <Transition name="rise">
+              <p v-if="orphanTotal" class="debts-orphan">
+                ⚠ <MoneyValue :cents="orphanTotal" /> de días sin pagador — apunta quién puso el dinero
+              </p>
+            </Transition>
           </div>
 
           <p v-else-if="count" class="debts-clear">✓ nadie arrastra deuda de otros días</p>
@@ -501,9 +598,10 @@ async function copyList() {
       </div>
     </section>
 
-    </template>
+    </div>
 
-    <HistoryPanel v-else />
+    <HistoryPanel v-else key="history" />
+    </Transition>
     </main>
 
     <footer class="foot">
@@ -543,27 +641,46 @@ async function copyList() {
       </div>
     </Transition>
 
-    <!-- tragaperras: ¿quién recoge los bocatas? -->
-    <SlotMachine
-      v-if="slotOpen"
-      :key="slotRound"
-      :draw="draw"
-      :people="people"
-      :odds="odds"
-      @close="closeDraw"
-      @pull="onPull"
-      @again="openMachine"
-      @toggle="toggleAvailable"
-    />
+    <!--
+      Tragaperras: ¿quién recoge los bocatas?
 
-    <PriceList v-if="showPrices" @close="showPrices = false" />
+      Los tres modales se montan aquí dentro de un Teleport y un <Transition>.
+      El Teleport vivía antes en cada componente, pero una transición no puede
+      animar un Teleport: hay que envolver el contenido, no la puerta. Movidos
+      aquí, los tres entran y salen animados en vez de esfumarse al desmontarse.
+    -->
+    <Teleport to="body">
+      <Transition name="modal">
+        <SlotMachine
+          v-if="slotOpen"
+          :key="slotRound"
+          :draw="draw"
+          :people="people"
+          :odds="odds"
+          @close="closeDraw"
+          @pull="onPull"
+          @again="openMachine"
+          @toggle="toggleAvailable"
+        />
+      </Transition>
+    </Teleport>
+
+    <Teleport to="body">
+      <Transition name="modal">
+        <PriceList v-if="showPrices" @close="showPrices = false" />
+      </Transition>
+    </Teleport>
 
     <!--
       Pregunta antes de actuar (saldar, cobrar…). Se monta y desmonta con la
       pregunta, como PriceList: useModal engancha el foco y el Escape al montar.
       El :key fuerza el remontaje si una pregunta reemplaza a otra.
     -->
-    <ConfirmDialog v-if="confirmPending" :key="confirmPending.id" />
+    <Teleport to="body">
+      <Transition name="modal">
+        <ConfirmDialog v-if="confirmPending" :key="confirmPending.id" />
+      </Transition>
+    </Teleport>
 
     <!-- avisos del sistema: errores, confirmaciones y deshacer -->
     <Notices />
@@ -761,7 +878,6 @@ main {
   gap: 0.45rem;
   width: 100%;
   text-align: left;
-  cursor: pointer;
   border: 1px solid var(--g5);
   border-radius: var(--radius);
   padding: 1rem 1.2rem;
@@ -769,9 +885,38 @@ main {
     radial-gradient(120% 120% at 0% 0%, color-mix(in srgb, var(--g5) 14%, transparent), transparent 60%),
     var(--panel);
   box-shadow: 0 0 22px -8px var(--g5);
-  transition: box-shadow 0.18s, transform 0.18s;
+  transition: box-shadow var(--dur-2) var(--ease-out), border-color var(--dur-2) var(--ease-out);
 }
-.pick-card:hover { box-shadow: 0 0 26px -4px var(--g5); transform: translateY(-1px); }
+.pick-card:hover { box-shadow: 0 0 26px -4px var(--g5); }
+/* sin nadie apuntado no hay nada que celebrar: el verde se apaga y la tarjeta
+   se queda en el gris del resto, para que se lea como un hueco por rellenar */
+.pick-card.empty {
+  border-color: var(--line-2);
+  background: var(--panel);
+  box-shadow: none;
+}
+.pick-card.empty .pick-name { color: var(--ink-dim); text-shadow: none; }
+
+.pick-body { display: flex; flex-direction: column; gap: 0.45rem; min-width: 0; }
+.pick-acts { display: flex; flex-wrap: wrap; gap: var(--sp-1); }
+.pick-btn {
+  flex: 1 1 auto;
+  min-height: var(--tap);
+  border: 1px solid var(--line-2);
+  border-radius: var(--radius);
+  background: transparent;
+  color: var(--ink-dim);
+  font-family: var(--mono);
+  font-size: var(--fs-1);
+  letter-spacing: 0.04em;
+  padding: 0.3rem 0.5rem;
+  cursor: pointer;
+  transition: color var(--dur-1), border-color var(--dur-1), background var(--dur-1);
+}
+.pick-btn:hover:not(:disabled) { color: var(--ink); border-color: var(--ink-dim); background: var(--bg-soft); }
+.pick-btn:disabled { opacity: 0.4; cursor: not-allowed; }
+.pick-edit { display: flex; align-items: center; gap: var(--sp-1); }
+.pick-edit .pay-sel { flex: 1 1 auto; min-width: 0; }
 .pick-lbl {
   font-size: var(--fs-2);
   letter-spacing: 0.08em;
@@ -790,7 +935,6 @@ main {
   text-overflow: ellipsis;
   white-space: nowrap;
 }
-.pick-hint { font-size: var(--fs-1); color: var(--ink-dim); letter-spacing: 0.04em; }
 .stat-card {
   border: 1px solid var(--line-2);
   border-radius: var(--radius);
@@ -868,7 +1012,7 @@ main {
   border-radius: var(--radius-pill);
   padding: 0.2rem 0.6rem;
   cursor: pointer;
-  transition: color 0.15s, background 0.15s, border-color 0.15s;
+  transition: color var(--dur-1), background var(--dur-1), border-color var(--dur-1);
 }
 .pay-fix:hover { color: var(--bg); background: var(--g7); border-color: var(--g7); }
 .pay-sel {
@@ -879,8 +1023,51 @@ main {
   border: 1px solid var(--ink);
   border-radius: var(--radius);
   padding: 0.25rem 0.5rem;
+  min-height: var(--tap);
   max-width: 100%;
 }
+
+/*
+ * Las dos mitades del relevo. Antes eran hijos sueltos del .pay-row y se
+ * repartían con su justify-content; ahora van envueltas para que el
+ * <Transition mode="out-in"> tenga un único hijo por estado.
+ */
+.pay-show,
+.pay-edit {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  flex: 1 1 auto;
+  flex-wrap: wrap;
+  gap: 0.5rem 0.8rem;
+  min-width: 0;
+}
+.pay-edit { justify-content: flex-start; flex-wrap: nowrap; }
+.pay-edit .pay-sel { flex: 1 1 auto; min-width: 0; }
+
+/*
+ * La salida del corrector. Sin ella el desplegable sólo se cerraba eligiendo a
+ * alguien: como no llevaba :value, el navegador dejaba puesta la primera
+ * opción, así que volver a elegirla no disparaba `change` y no había manera de
+ * salir sin cambiar el pagador.
+ */
+.pay-x {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+  min-width: var(--tap);
+  min-height: var(--tap);
+  font-family: var(--mono);
+  font-size: var(--fs-2);
+  color: var(--ink-dim);
+  background: transparent;
+  border: 1px solid var(--line-2);
+  border-radius: var(--radius);
+  cursor: pointer;
+  transition: color var(--dur-1), background var(--dur-1), border-color var(--dur-1);
+}
+.pay-x:hover { color: var(--bg); background: var(--g6); border-color: var(--g6); }
 
 /* ---- tu posición: a quién le debes y quién te debe ---- */
 .mine-money {
@@ -888,6 +1075,9 @@ main {
   flex-direction: column;
   gap: 0.35rem;
   margin-top: 0.85rem;
+  /* ancla para la fila que se va: al salir pasa a position:absolute (ver
+     .list-leave-active) y sin esto se colocaría respecto a la ventana */
+  position: relative;
 }
 .mm-row {
   display: flex;
@@ -954,7 +1144,7 @@ main {
   margin-bottom: 0.6rem;
 }
 .debts-total { color: var(--g6); font-weight: 700; font-variant-numeric: tabular-nums; }
-.debts ul { list-style: none; display: flex; flex-direction: column; gap: 0.35rem; }
+.debts ul { list-style: none; display: flex; flex-direction: column; gap: 0.35rem; position: relative; }
 .debt-row {
   display: flex;
   align-items: center;

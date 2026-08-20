@@ -8,6 +8,7 @@ import { personEmoji } from '../composables/usePersonEmoji.js'
 import { useMe } from '../composables/useMe.js'
 import { fmt, fmtOrDash } from '../money.js'
 import { confirmSettle } from '../composables/useSettle.js'
+import { useInlineEdit } from '../composables/useInlineEdit.js'
 
 /*
  * HistoryPanel — modo histórico. Tres bloques:
@@ -53,19 +54,32 @@ const dayPeople = computed(() => {
   return out
 })
 
-const editingWinner = ref(false)
-const editingPayer = ref(false)
+/*
+ * Los dos correctores del día. Comparten useInlineEdit con los de la portada,
+ * y sobre todo comparten la salida que les faltaba: sólo el evento `change`
+ * los cerraba, así que abrir el desplegable obligaba a corregir algo para
+ * poder salir. Ahora Escape, el botón ✕ y quitar el foco cierran sin tocar
+ * nada.
+ */
+const {
+  editing: editingWinner, el: winnerSel,
+  open: openWinnerEdit, cancel: cancelWinnerEdit, blur: blurWinnerEdit,
+} = useInlineEdit()
+const {
+  editing: editingPayer, el: payerSel,
+  open: openPayerEdit, cancel: cancelPayerEdit, blur: blurPayerEdit,
+} = useInlineEdit()
 
 async function chooseWinner(e) {
   const name = e.target.value
-  editingWinner.value = false
+  cancelWinnerEdit()
   if (name) await setWinner(selectedDay.value, name)
 }
 
 // cadena vacía = ese día vuelve a pagar quien recogió
 async function choosePayer(e) {
   const name = e.target.value
-  editingPayer.value = false
+  cancelPayerEdit()
   await setPayer(selectedDay.value, name)
 }
 
@@ -75,8 +89,8 @@ async function choosePayer(e) {
  * suyos. Se cierran al cambiar de día.
  */
 function openDay(day) {
-  editingWinner.value = false
-  editingPayer.value = false
+  cancelWinnerEdit()
+  cancelPayerEdit()
   return select(day)
 }
 
@@ -160,7 +174,13 @@ async function askSettle(person, pending) {
             </span>
           </button>
 
-          <!-- detalle del día -->
+          <!--
+            Detalle del día. El desplegado va con la transición `collapse`
+            (grid-template-rows 0fr → 1fr): anima a la altura REAL del
+            contenido, sin medir con JavaScript ni inventar un max-height que
+            o recorta o deja un tramo muerto al plegar.
+          -->
+          <Transition name="collapse">
           <div v-if="selectedDay === d.day && detailLoading && !dayDetail" class="d-detail">
             <p class="h-empty">cargando el día… <span class="blink" aria-hidden="true">_</span></p>
           </div>
@@ -173,14 +193,25 @@ async function askSettle(person, pending) {
                   <span class="d-emoji">{{ dayDetail.draw ? personEmoji(dayDetail.draw.winner) : '❔' }}</span>
                   {{ dayDetail.draw?.winner || 'sin registrar' }}
                 </span>
-                <button v-if="dayPeople.length" class="dd-fix" type="button" @click="editingWinner = true">
+                <button v-if="dayPeople.length" class="dd-fix" type="button" @click="openWinnerEdit()">
                   ✎ corregir
                 </button>
               </template>
-              <select v-else class="dd-sel" aria-label="quién recogió de verdad" @change="chooseWinner">
-                <option value="">elige…</option>
-                <option v-for="p in dayPeople" :key="p" :value="p">{{ p }}</option>
-              </select>
+              <span v-else class="dd-edit">
+                <select
+                  ref="winnerSel"
+                  class="dd-sel"
+                  aria-label="quién recogió de verdad"
+                  :value="dayDetail.draw?.winner || ''"
+                  @change="chooseWinner"
+                  @keydown.esc.stop.prevent="cancelWinnerEdit()"
+                  @blur="blurWinnerEdit()"
+                >
+                  <option value="" disabled>elige…</option>
+                  <option v-for="p in dayPeople" :key="p" :value="p">{{ p }}</option>
+                </select>
+                <button class="dd-x" type="button" title="Dejarlo como estaba" @click="cancelWinnerEdit()">✕</button>
+              </span>
               <span class="dd-lbl">// pagó</span>
               <template v-if="!editingPayer">
                 <span class="dd-winner">
@@ -188,12 +219,23 @@ async function askSettle(person, pending) {
                   {{ dayDetail.payer || 'sin pagador' }}
                   <small v-if="dayDetail.payerSource === 'draw'" class="dd-src">// quien recogió</small>
                 </span>
-                <button class="dd-fix" type="button" @click="editingPayer = true">✎ cambiar</button>
+                <button class="dd-fix" type="button" @click="openPayerEdit()">✎ cambiar</button>
               </template>
-              <select v-else class="dd-sel" aria-label="quién puso el dinero ese día" @change="choosePayer">
-                <option value="">— sigue a quien recogió —</option>
-                <option v-for="p in dayPeople" :key="p" :value="p">{{ p }}</option>
-              </select>
+              <span v-else class="dd-edit">
+                <select
+                  ref="payerSel"
+                  class="dd-sel"
+                  aria-label="quién puso el dinero ese día"
+                  :value="dayDetail.payerSource === 'manual' ? dayDetail.payer : ''"
+                  @change="choosePayer"
+                  @keydown.esc.stop.prevent="cancelPayerEdit()"
+                  @blur="blurPayerEdit()"
+                >
+                  <option value="">— sigue a quien recogió —</option>
+                  <option v-for="p in dayPeople" :key="p" :value="p">{{ p }}</option>
+                </select>
+                <button class="dd-x" type="button" title="Dejarlo como estaba" @click="cancelPayerEdit()">✕</button>
+              </span>
               <span class="dd-money">
                 {{ fmt(dayDetail.totals.total) }}
                 <template v-if="dayDetail.totals.pending">
@@ -210,6 +252,7 @@ async function askSettle(person, pending) {
             />
             <p v-else class="h-empty">ese día no se pidió nada.</p>
           </div>
+          </Transition>
         </li>
       </ul>
     </section>
@@ -517,7 +560,28 @@ async function askSettle(person, pending) {
   border: 1px solid var(--ink);
   border-radius: var(--radius);
   padding: 0.25rem 0.5rem;
+  min-height: var(--tap);
+  min-width: 0;
 }
+.dd-edit { display: inline-flex; align-items: center; gap: var(--sp-1); min-width: 0; }
+/* la salida que faltaba: sin ella el desplegable sólo se cerraba corrigiendo */
+.dd-x {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+  min-width: var(--tap);
+  min-height: var(--tap);
+  font-family: var(--mono);
+  font-size: var(--fs-2);
+  color: var(--ink-dim);
+  background: transparent;
+  border: 1px solid var(--line-2);
+  border-radius: var(--radius);
+  cursor: pointer;
+  transition: color var(--dur-1), background var(--dur-1), border-color var(--dur-1);
+}
+.dd-x:hover { color: var(--bg); background: var(--g6); border-color: var(--g6); }
 
 /* ---- por persona ---- */
 .p-row, .o-row {
