@@ -173,7 +173,7 @@ onBeforeUnmount(() => {
 
 .g-char {
   display: inline-block;
-  transition: color 0.12s linear;
+  transition: color var(--dur-1) linear;
   min-width: 0.18em;
   text-align: center;
 }

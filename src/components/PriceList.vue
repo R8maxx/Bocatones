@@ -231,7 +231,9 @@ const rollDelay = (i) => DUR.d3 + Math.min(i, 12) * STAGGER
   height: 2rem;
   border-radius: var(--radius);
   cursor: pointer;
-  transition: color 0.15s, background 0.15s;
+  transition:
+    color var(--dur-1) var(--ease-out),
+    background var(--dur-1) var(--ease-out);
 }
 .pl-x:hover { color: var(--bg); background: var(--ink); }
 

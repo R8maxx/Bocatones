@@ -70,7 +70,9 @@ const { bg, setBg, reset, PRESETS, DEFAULT_BG } = useTheme()
   cursor: pointer;
   padding: 0;
   position: relative;
-  transition: transform 0.12s, box-shadow 0.12s;
+  transition:
+    transform var(--dur-1) var(--ease-out),
+    box-shadow var(--dur-1) var(--ease-out);
 }
 .sw:hover { transform: scale(1.18); }
 .sw.active {
@@ -108,7 +110,9 @@ const { bg, setBg, reset, PRESETS, DEFAULT_BG } = useTheme()
   border-radius: 999px;
   padding: 0.15rem 0.6rem;
   cursor: pointer;
-  transition: color 0.15s, border-color 0.15s;
+  transition:
+    color var(--dur-1) var(--ease-out),
+    border-color var(--dur-1) var(--ease-out);
 }
 .reset:hover { color: var(--ink); border-color: var(--ink); }
 </style>

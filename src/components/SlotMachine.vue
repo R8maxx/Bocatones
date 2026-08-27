@@ -633,7 +633,10 @@ onBeforeUnmount(() => {
   height: 2.1rem;
   cursor: pointer;
   box-shadow: var(--shadow-sm), inset 0 1px 1px var(--glow-soft);
-  transition: color 0.15s, border-color 0.15s, transform 0.15s;
+  transition:
+    color var(--dur-1) var(--ease-out),
+    border-color var(--dur-1) var(--ease-out),
+    transform var(--dur-1) var(--ease-out);
 }
 .x:hover { color: var(--ink); border-color: var(--ink-dim); transform: rotate(90deg); }
 
@@ -969,7 +972,10 @@ onBeforeUnmount(() => {
   min-height: var(--tap);
   padding: 0.14rem 0.4rem;
   cursor: pointer;
-  transition: background 0.15s, border-color 0.15s, opacity 0.15s;
+  transition:
+    background var(--dur-1) var(--ease-out),
+    border-color var(--dur-1) var(--ease-out),
+    opacity var(--dur-1) var(--ease-out);
 }
 .odd:hover { border-color: var(--line-2); background: var(--bg-soft); }
 .odd.mine .odd-name { font-weight: 700; text-decoration: underline; text-underline-offset: 3px; }
@@ -1007,7 +1013,7 @@ onBeforeUnmount(() => {
   border-radius: var(--radius-pill);
   transform: scaleX(var(--fill, 0));
   transform-origin: left;
-  transition: transform 0.4s cubic-bezier(0.2, 0.8, 0.2, 1);
+  transition: transform var(--dur-4) var(--ease-out);
 }
 .odd-pct { text-align: right; font-variant-numeric: tabular-nums; color: var(--ink); }
 .odd-gone { text-align: right; font-size: var(--fs-1); color: var(--ink-faint); white-space: nowrap; }
@@ -1080,7 +1086,10 @@ onBeforeUnmount(() => {
   border-radius: var(--radius);
   padding: 0.45rem 0.95rem;
   cursor: pointer;
-  transition: color 0.15s, background 0.15s, border-color 0.15s;
+  transition:
+    color var(--dur-1) var(--ease-out),
+    background var(--dur-1) var(--ease-out),
+    border-color var(--dur-1) var(--ease-out);
 }
 .again {
   color: var(--ink-dim);
@@ -1095,7 +1104,8 @@ onBeforeUnmount(() => {
 }
 .ok:hover { box-shadow: 0 0 22px -4px color-mix(in srgb, var(--ink) 50%, transparent); }
 
-.winner-enter-active, .winner-leave-active { transition: opacity 0.35s ease, transform 0.35s ease; }
+.winner-enter-active { transition: opacity var(--dur-3) var(--ease-out), transform var(--dur-3) var(--ease-out); }
+.winner-leave-active { transition: opacity var(--dur-2) var(--ease-out), transform var(--dur-2) var(--ease-out); }
 .winner-enter-from { opacity: 0; transform: translateY(8px); }
 .winner-leave-to { opacity: 0; }
 

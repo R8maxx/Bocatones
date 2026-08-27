@@ -175,7 +175,11 @@ const { onVeilPointerDown, onVeilClick } = useVeilClose(cancelConfirm)
   border-radius: var(--radius);
   padding: 0.4rem 0.9rem;
   cursor: pointer;
-  transition: color 0.18s, background 0.18s, border-color 0.18s, box-shadow 0.18s;
+  transition:
+    color var(--dur-2) var(--ease-out),
+    background var(--dur-2) var(--ease-out),
+    border-color var(--dur-2) var(--ease-out),
+    box-shadow var(--dur-2) var(--ease-out);
 }
 .cd-btn.cancel {
   color: var(--ink-dim);

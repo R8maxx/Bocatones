@@ -131,7 +131,10 @@ const canSwipe = (n) => n.kind !== 'undo'
   border: 1px solid var(--line-2);
   border-radius: var(--radius-pill);
   cursor: pointer;
-  transition: color 0.15s, border-color 0.15s, background 0.15s;
+  transition:
+    color var(--dur-1) var(--ease-out),
+    border-color var(--dur-1) var(--ease-out),
+    background var(--dur-1) var(--ease-out);
 }
 .n-undo {
   font-size: var(--fs-1);

@@ -121,6 +121,16 @@ async function onAdd(fields, { resolve, reject }) {
   }
 }
 
+// lo mismo al editar: OrderList necesita saber si el PUT ha ido bien para
+// decidir si cierra el formulario o conserva lo escrito
+async function onUpdate(id, fields, { resolve, reject }) {
+  try {
+    resolve(await updateOrder(id, fields))
+  } catch (e) {
+    reject(e)
+  }
+}
+
 // cobrar: solo lo que te deben A TI, no todo lo que esa persona debe
 async function askCollect(row) {
   if (await confirmCollect(row.debtor, row.pending)) {
@@ -838,7 +848,7 @@ async function copyList() {
         :orders="orders"
         :fresh-ids="freshIds"
         @remove="removeOrder"
-        @update="updateOrder"
+        @update="onUpdate"
         @paid="setPaid"
       />
 
@@ -1032,7 +1042,9 @@ async function copyList() {
   transform: translateY(-100%);
   opacity: 0;
   pointer-events: none;
-  transition: transform 0.28s cubic-bezier(0.2, 0.9, 0.2, 1), opacity 0.28s;
+  transition:
+    transform var(--dur-3) var(--ease-inout),
+    opacity var(--dur-3) var(--ease-inout);
 }
 .stickybar.show {
   transform: translateY(0);
@@ -1062,7 +1074,9 @@ async function copyList() {
   min-height: var(--tap);
   cursor: pointer;
   white-space: nowrap;
-  transition: color 0.15s, border-color 0.15s;
+  transition:
+    color var(--dur-1) var(--ease-out),
+    border-color var(--dur-1) var(--ease-out);
 }
 .sb-btn:hover { color: var(--ink); border-color: var(--ink-dim); }
 
@@ -1074,7 +1088,9 @@ async function copyList() {
 .dot {
   width: 7px; height: 7px; border-radius: 50%;
   background: var(--ink-faint);
-  transition: background 0.3s, box-shadow 0.3s;
+  transition:
+    background var(--dur-3) var(--ease-out),
+    box-shadow var(--dur-3) var(--ease-out);
 }
 .dot.on  { background: var(--g5); box-shadow: 0 0 8px var(--g5); }
 .dot.wait { background: var(--g3); box-shadow: 0 0 8px var(--g3); }
@@ -1115,7 +1131,10 @@ async function copyList() {
   border-radius: 999px;
   padding: 0.34rem 0.9rem;
   cursor: pointer;
-  transition: color 0.15s, border-color 0.15s, background 0.15s;
+  transition:
+    color var(--dur-1) var(--ease-out),
+    border-color var(--dur-1) var(--ease-out),
+    background var(--dur-1) var(--ease-out);
 }
 .nav-btn:hover { color: var(--ink); border-color: var(--ink-dim); }
 .nav-btn.on {
@@ -1413,7 +1432,10 @@ main {
   padding: 0.16rem 0.55rem;
   cursor: pointer;
   white-space: nowrap;
-  transition: color 0.15s, background 0.15s, border-color 0.15s;
+  transition:
+    color var(--dur-1) var(--ease-out),
+    background var(--dur-1) var(--ease-out),
+    border-color var(--dur-1) var(--ease-out);
 }
 /* la acción RESULTA en "pagado": ahí sí toca el verde */
 .mm-btn:hover { color: var(--bg); background: var(--g5); border-color: var(--g5); }
@@ -1490,7 +1512,10 @@ main {
   padding: 0.16rem 0.55rem;
   cursor: pointer;
   white-space: nowrap;
-  transition: color 0.15s, border-color 0.15s, background 0.15s;
+  transition:
+    color var(--dur-1) var(--ease-out),
+    border-color var(--dur-1) var(--ease-out),
+    background var(--dur-1) var(--ease-out);
 }
 .debt-amount:hover { color: var(--bg); background: var(--g6); border-color: var(--g6); }
 .debts-hint { font-size: var(--fs-1); color: var(--ink-faint); margin-top: 0.55rem; }
@@ -1555,7 +1580,7 @@ main {
   border-radius: var(--radius-pill);
   transform: scaleX(0);
   transform-origin: left;
-  transition: transform 0.45s cubic-bezier(0.2, 0.8, 0.2, 1);
+  transition: transform var(--dur-4) var(--ease-out);
 }
 /* se llena cuando el panel entra en pantalla */
 .tally.is-revealed .t-fill { transform: scaleX(var(--fill, 0)); }
@@ -1599,7 +1624,10 @@ main {
   border-radius: var(--radius);
   padding: 0.4rem 0.85rem;
   cursor: pointer;
-  transition: border-color 0.15s, box-shadow 0.15s, opacity 0.15s;
+  transition:
+    border-color var(--dur-1) var(--ease-out),
+    box-shadow var(--dur-1) var(--ease-out),
+    opacity var(--dur-1) var(--ease-out);
 }
 .draw:hover:not(:disabled) {
   border-color: var(--g3);
@@ -1620,7 +1648,11 @@ main {
   border-radius: var(--radius);
   padding: 0.4rem 0.9rem;
   cursor: pointer;
-  transition: color 0.18s, background 0.18s, border-color 0.18s, box-shadow 0.18s;
+  transition:
+    color var(--dur-2) var(--ease-out),
+    background var(--dur-2) var(--ease-out),
+    border-color var(--dur-2) var(--ease-out),
+    box-shadow var(--dur-2) var(--ease-out);
 }
 .copy:hover { box-shadow: 0 0 22px -4px var(--glow-hard); }
 .copy.done {
@@ -1638,7 +1670,9 @@ main {
   border-radius: var(--radius);
   padding: 0.4rem 0.8rem;
   cursor: pointer;
-  transition: color 0.15s, border-color 0.15s;
+  transition:
+    color var(--dur-1) var(--ease-out),
+    border-color var(--dur-1) var(--ease-out);
 }
 .clear:hover {
   color: var(--g1);
@@ -1714,7 +1748,9 @@ main {
   height: 24px;
   border-radius: 6px;
   box-shadow: 0 0 0 1px var(--line-2);
-  transition: box-shadow 0.2s, transform 0.2s;
+  transition:
+    box-shadow var(--dur-2) var(--ease-out),
+    transform var(--dur-2) var(--ease-out);
 }
 .credit:hover .credit-logo {
   box-shadow: 0 0 0 1px var(--g8), 0 0 14px -4px var(--g8);
@@ -1736,7 +1772,7 @@ main {
   pointer-events: none;
   /* se desplaza con `top`, no con transform: el transform de .toast ya se lo
      reparten .toast-enter-from y .toast-leave-to, y se pisarían */
-  transition: top 0.28s cubic-bezier(0.2, 0.9, 0.2, 1);
+  transition: top var(--dur-3) var(--ease-inout);
 }
 
 /* con la barra compacta en pantalla, el aviso se sienta debajo de ella. Misma
@@ -1852,8 +1888,8 @@ main {
 @keyframes drain { to { transform: scaleX(0); } }
 
 /* entrada/salida del conjunto */
-.toast-enter-active { transition: transform 0.35s cubic-bezier(0.2, 0.9, 0.2, 1), opacity 0.35s; }
-.toast-leave-active { transition: transform 0.35s ease, opacity 0.35s; }
+.toast-enter-active { transition: transform var(--dur-3) var(--ease-inout), opacity var(--dur-3) var(--ease-inout); }
+.toast-leave-active { transition: transform var(--dur-2) var(--ease-out), opacity var(--dur-2) var(--ease-out); }
 .toast-enter-from { transform: translateX(30px); opacity: 0; }
 .toast-leave-to { transform: translateX(20px) scale(0.95); opacity: 0; }
 

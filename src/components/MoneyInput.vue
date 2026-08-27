@@ -170,7 +170,7 @@ const inputAttrs = computed(() => {
   border: 1px solid var(--line-2);
   border-radius: 999px;
   padding: var(--pad-y) var(--pad-r) var(--pad-y) var(--pad-l);
-  transition: border-color 0.15s;
+  transition: border-color var(--dur-1) var(--ease-out);
 }
 .mi-input::placeholder { color: var(--ink-faint); }
 .mi-input:focus { border-color: var(--ink); }

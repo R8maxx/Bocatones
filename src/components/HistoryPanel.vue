@@ -474,7 +474,10 @@ async function askSettle(person, pending) {
   border-radius: var(--radius);
   padding: 0.6rem 0.8rem;
   cursor: pointer;
-  transition: border-color 0.18s, background 0.18s, transform 0.18s;
+  transition:
+    border-color var(--dur-2) var(--ease-out),
+    background var(--dur-2) var(--ease-out),
+    transform var(--dur-2) var(--ease-out);
 }
 .d-row:hover { border-left-color: var(--ink); background: var(--panel); transform: translateX(3px); }
 .d-row.open { border-left-color: var(--g7); background: var(--panel); color: var(--ink); }
@@ -556,7 +559,10 @@ async function askSettle(person, pending) {
   border-radius: 999px;
   padding: 0.2rem 0.6rem;
   cursor: pointer;
-  transition: color 0.15s, background 0.15s, border-color 0.15s;
+  transition:
+    color var(--dur-1) var(--ease-out),
+    background var(--dur-1) var(--ease-out),
+    border-color var(--dur-1) var(--ease-out);
 }
 .dd-fix:hover { color: var(--bg); background: var(--g7); border-color: var(--g7); }
 /* el pagador del día y los acreedores: matices, nunca protagonistas */
@@ -625,7 +631,7 @@ async function askSettle(person, pending) {
   border-radius: var(--radius-pill);
   transform: scaleX(0);
   transform-origin: left;
-  transition: transform 0.45s cubic-bezier(0.2, 0.8, 0.2, 1);
+  transition: transform var(--dur-4) var(--ease-out);
 }
 .p-fill { background: var(--ink-dim); }
 .o-fill { background: var(--ink); }

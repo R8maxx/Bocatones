@@ -8,23 +8,25 @@
  *
  * Sí, los valores están escritos dos veces. Es a propósito, y es lo que ya se
  * hace en este proyecto cuando no hay otra: base.css:100 declara --glow-soft
- * dos veces, y SlotMachine repite la paleta. SI SE TOCA base.css:126-133, SE
+ * dos veces, y SlotMachine repite la paleta. SI SE TOCA EL BLOQUE «Movimiento»
+ * DE base.css (--dur-*, --ease-* y --stagger), SE
  * TOCA ESTO — no hay nada que lo compruebe por ti.
  *
  * Mismo papel que money.js con el dinero: un único sitio del que sale el dato.
  */
 import { ref } from 'vue'
 
-// --dur-1..4 de base.css:126-129, en milisegundos (lo que quiere NumberFlow)
-export const DUR = { d1: 120, d2: 200, d3: 280, d4: 420 }
+// --dur-1..4 del bloque «Movimiento» de base.css, en milisegundos (que es lo
+// que quiere NumberFlow)
+export const DUR = { d1: 150, d2: 240, d3: 340, d4: 480 }
 
-// --stagger de base.css:137, en ms: lo que se retrasa cada fila de una lista
+// --stagger de base.css, en ms: lo que se retrasa cada fila de una lista
 // que entra escalonada. En CSS lo usa OrderList; en JS, el rodillo de los
 // precios del catálogo, que entra fila a fila con el panel.
-export const STAGGER = 45
+export const STAGGER = 55
 
 /*
- * --ease-* de base.css:130-132, pero en NÚMEROS.
+ * --ease-* de base.css, pero en NÚMEROS.
  *
  * Los cuatro puntos de control, no la cadena, porque hay dos consumidores que
  * los quieren en formatos distintos: WAAPI (NumberFlow) quiere el
