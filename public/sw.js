@@ -17,13 +17,16 @@
  * nuevos, que se piden a la red. No se queda una app vieja pegada para siempre.
  */
 
-const CACHE = 'bocatones-v1'
+// sube este número CADA VEZ que cambie un icono o el shell: los .ico/.png van
+// cache-first y sin hash, así que sin renombrar la caché el visitante que ya
+// tenía el service worker se queda con la copia vieja para siempre
+const CACHE = 'bocatones-v2'
 
 // lo mínimo para que la app ABRA sin red: el documento, sus iconos y las fuentes
 const SHELL = [
   '/',
   '/manifest.webmanifest',
-  '/favicon.ico',
+  '/favicon.ico?v=2', // misma URL que index.html, o el precache no casa con la petición
   '/apple-touch-icon.png',
   '/icon-192.png',
   '/icon-512.png',
