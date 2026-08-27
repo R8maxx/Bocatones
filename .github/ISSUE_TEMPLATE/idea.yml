@@ -1,0 +1,27 @@
+name: "💡 Idea nueva"
+description: Algo que te gustaría que Bocatones supiera hacer.
+labels: ["idea"]
+body:
+  - type: textarea
+    id: que
+    attributes:
+      label: ¿Qué te gustaría poder hacer?
+      placeholder: Poder marcar un bocata como "para llevar"…
+    validations:
+      required: true
+
+  - type: textarea
+    id: para-que
+    attributes:
+      label: ¿Para qué sirve?
+      description: Qué problema real resuelve, o qué discusión en el bar se ahorra.
+    validations:
+      required: true
+
+  - type: textarea
+    id: como
+    attributes:
+      label: ¿Cómo te lo imaginas?
+      description: Opcional. Dónde iría el botón, qué debería pasar al pulsarlo, un boceto…
+    validations:
+      required: false
