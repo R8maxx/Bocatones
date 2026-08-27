@@ -71,3 +71,34 @@ export function useModal(panelRef, onClose) {
     opener?.focus?.()
   })
 }
+
+/*
+ * useVeilClose — cerrar al pulsar el velo, pero solo si el gesto EMPIEZA en el
+ * velo.
+ *
+ * Con `@click.self` a secas no basta: el navegador sintetiza el `click` en el
+ * ancestro común de donde pulsaste y donde soltaste, y en un modal ese ancestro
+ * es justo el velo. Así que un arrastre que empieza DENTRO del panel y suelta
+ * fuera cuenta como clic en el velo y cierra.
+ *
+ * No es teórico: el asa del arrastre se queda en `pointer-events: none` mientras
+ * el gesto está vivo (lo hace anime.js para comerse el clic de después), así que
+ * un tirón corto —de los que NO llegan al umbral y deben volver a su sitio—
+ * suelta el ratón sobre el velo y cerraba el modal. En ConfirmDialog eso además
+ * responde «no» a la pregunta.
+ *
+ * Comprobar el pointerdown es la forma general, y es el mismo patrón que la
+ * tragaperras ya tenía para su palanca.
+ */
+export function useVeilClose(onClose) {
+  let downOnVeil = false
+
+  return {
+    onVeilPointerDown(e) {
+      downOnVeil = e.target === e.currentTarget
+    },
+    onVeilClick(e) {
+      if (e.target === e.currentTarget && downOnVeil) onClose()
+    },
+  }
+}

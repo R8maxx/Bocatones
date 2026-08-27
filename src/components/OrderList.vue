@@ -1,6 +1,8 @@
 <script setup>
 import { ref, reactive, nextTick } from 'vue'
-import { fmt, toInput, parse } from '../money.js'
+import { toInput, parse } from '../money.js'
+import MoneyValue from './MoneyValue.vue'
+import MoneyInput from './MoneyInput.vue'
 import { useMe } from '../composables/useMe.js'
 
 defineProps({
@@ -54,12 +56,24 @@ function save(id) {
 
 <template>
   <div class="list">
-    <TransitionGroup name="row" tag="ul" class="rows">
+    <!--
+      type="transition" no es decoracion: .row declara SIEMPRE
+      `animation: row-in var(--dur-4) ... backwards` con su animation-delay (hasta
+      12 * --stagger). Al salir, Vue mide la transicion Y la animacion y se queda
+      con la mas larga, asi que elegia la ANIMACION (420 + 540 = 960ms) en vez de
+      los 200ms de .row-leave-active. Luego esperaba un `animationend` que no
+      llega nunca —row-in acabo hace rato— y caia en su setTimeout: la fila
+      terminaba su fundido a los 200ms y se quedaba 760ms mas en el DOM,
+      invisible y en position: absolute, estorbando al -move de las vecinas.
+
+      Con esto Vue solo mira la transicion, que es la que de verdad la saca.
+    -->
+    <TransitionGroup name="row" type="transition" tag="ul" class="rows">
       <li
         v-for="(o, i) in orders"
         :key="o.id"
         class="row"
-        :class="{ editing: editingId === o.id, fresh: freshIds.has(o.id), mine: isMe(o.person) }"
+        :class="{ editing: editingId === o.id, fresh: freshIds.has(o.id), mine: isMe(o.person), paid: !!o.paid }"
         :style="{ '--i': Math.min(i, 12) }"
       >
         <span v-if="freshIds.has(o.id)" class="new-badge" aria-hidden="true">NUEVO</span>
@@ -85,7 +99,7 @@ function save(id) {
           </div>
 
           <div class="pay">
-            <span class="amount">{{ fmt(o.price) }}</span>
+            <span class="amount"><MoneyValue :cents="o.price" /></span>
             <button
               class="paid-btn"
               type="button"
@@ -130,10 +144,10 @@ function save(id) {
                 <button type="button" class="e-seg-btn" :class="{ active: draft.size === 'half' }" @click="draft.size = 'half'">½ media</button>
                 <button type="button" class="e-seg-btn" :class="{ active: draft.size === 'whole' }" @click="draft.size = 'whole'">🥖 entero</button>
               </div>
-              <span class="e-price">
-                <input v-model="draft.price" type="text" inputmode="decimal" maxlength="7" placeholder="0,00" aria-label="precio en euros" />
-                <span class="e-cur" aria-hidden="true">€</span>
-              </span>
+              <!-- la misma caja de precio que el formulario de pedido, y del
+                   mismo sitio. Sin roll-in: aquí la cifra llega con el
+                   pedido que estás editando, no aparece sola. -->
+              <MoneyInput v-model="draft.price" style="--mi-w: 6rem" placeholder="0,00" aria-label="precio en euros" />
             </div>
             <div class="e-actions">
               <button class="e-btn save" type="submit" :disabled="!draft.filling.trim()">guardar</button>
@@ -153,6 +167,8 @@ function save(id) {
   display: flex;
   flex-direction: column;
   gap: 0.55rem;
+  /* relative porque .row-leave-active saca al que se va con position: absolute */
+  position: relative;
 }
 
 /*
@@ -312,22 +328,7 @@ function save(id) {
 
 /* fila de tamaño + precio en el modo edición */
 .e-row { display: flex; align-items: center; flex-wrap: wrap; gap: 0.6rem 0.9rem; }
-.e-price { position: relative; display: inline-flex; align-items: center; }
-.e-price input {
-  width: 6rem;
-  min-width: 0;
-  font-family: var(--mono);
-  font-size: var(--fs-3);
-  text-align: right;
-  font-variant-numeric: tabular-nums;
-  color: var(--ink);
-  background: var(--bg);
-  border: 1px solid var(--line-2);
-  border-radius: 999px;
-  padding: 0.26rem 1.5rem 0.26rem 0.7rem;
-}
-.e-price input:focus { border-color: var(--ink); }
-.e-cur { position: absolute; right: 0.65rem; font-size: var(--fs-2); color: var(--ink-faint); pointer-events: none; }
+/* la caja de precio la pone MoneyInput: borde, € dentro y cifra que rueda */
 
 .e-seg {
   display: inline-flex;
@@ -373,7 +374,24 @@ function save(id) {
   font-size: var(--fs-3);
   color: var(--ink-dim);
   white-space: nowrap;
+  transition: opacity var(--dur-3) var(--ease-out);
 }
+
+/*
+ * Pagado = el dinero se calla.
+ *
+ * El paso `debe -> pagado` era instantaneo: el boton cambiaba de color (ya
+ * tenia su transition) y el importe se quedaba igual de encendido que el de
+ * quien todavia debe. Asi no se distinguia de un vistazo lo que falta por
+ * cobrar, que es justo para lo que se mira la lista.
+ *
+ * Se apaga el importe y NO se tacha: `line-through` cambia la caja y no se
+ * puede animar con transform, que es la regla de la casa (base.css:334).
+ *
+ * Y NO se toca el borde izquierdo a proposito: ahi ya se pelean tres senales
+ * (.fresh, .editing y .mine). Una cuarta seria ruido, no informacion.
+ */
+.row.paid .amount { opacity: 0.45; }
 .paid-btn {
   display: inline-flex;
   align-items: center;
@@ -463,8 +481,14 @@ function save(id) {
 /* TransitionGroup — `all` incluía height/margin/padding, así que cada alta o
    baja provocaba un reflow de la lista entera; los -from/-to solo usan
    opacity y transform, con lo que `all` no aportaba nada */
-.row-enter-active { transition: opacity 0.32s, transform 0.32s cubic-bezier(0.2, 0.8, 0.2, 1); }
-.row-leave-active { transition: opacity 0.28s ease, transform 0.28s ease; position: relative; }
+.row-enter-active { transition: opacity var(--dur-3) var(--ease-out), transform var(--dur-3) var(--ease-out); }
+/* absolute y no relative: el que se va tiene que salir del flujo o los que
+   quedan no pueden deslizarse a su sitio con -move, que es justo el tiron seco
+   que -move existe para evitar. OJO: eso obliga a listarlo en el bloque de
+   movimiento reducido de base.css, con los demas -leave-active absolutos. */
+.row-leave-active { transition: opacity var(--dur-2) var(--ease-out), transform var(--dur-2) var(--ease-out); position: absolute; }
 .row-enter-from { opacity: 0; transform: translateX(-14px); border-left-color: var(--g5); }
 .row-leave-to { opacity: 0; transform: translateX(40px); }
+/* faltaba: reordenar la cola no estaba animado */
+.row-move { transition: transform var(--dur-3) var(--ease-out); }
 </style>

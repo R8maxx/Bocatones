@@ -5,6 +5,7 @@ import { useMe } from '../composables/useMe.js'
 import { usePeople } from '../composables/usePeople.js'
 import { api } from '../api.js'
 import { toInput, parse } from '../money.js'
+import MoneyInput from './MoneyInput.vue'
 
 const emit = defineEmits(['add'])
 const { classics, loading: classicsLoading, addClassic, removeClassic, priceFor } = useClassics()
@@ -218,21 +219,21 @@ function askRemoveClassic(id) {
         >🥖 entero</button>
       </div>
 
+      <!--
+        El precio RUEDA hasta el del catálogo: pulsar un clásico o un "lo de
+        siempre" es justo el gesto en el que la cifra se rellena sola, y de golpe
+        no se veía de dónde salía. Ver MoneyInput.
+      -->
       <label class="price">
         <span class="size-lbl">// precio</span>
-        <span class="price-box">
-          <input
-            v-model="price"
-            type="text"
-            inputmode="decimal"
-            maxlength="7"
-            :placeholder="suggestedTxt || '0,00'"
-            :title="suggestedTxt ? `precio del catálogo: ${suggestedTxt} €` : 'sin precio en el catálogo'"
-            aria-label="precio en euros"
-            @input="priceTouched = true"
-          />
-          <span class="cur" aria-hidden="true">€</span>
-        </span>
+        <MoneyInput
+          v-model="price"
+          style="--mi-w: 6.5rem"
+          :placeholder="suggestedTxt || '0,00'"
+          :title="suggestedTxt ? `precio del catálogo: ${suggestedTxt} €` : 'sin precio en el catálogo'"
+          aria-label="precio en euros"
+          @input="priceTouched = true"
+        />
       </label>
     </div>
 
@@ -367,29 +368,9 @@ input:focus {
   margin-top: var(--sp-3);
 }
 
-/* precio: input estrecho con el símbolo del euro dentro de la caja */
+/* precio: la caja se la pone MoneyInput (borde, € dentro y cifra que rueda);
+   aquí solo queda cómo se sienta al lado de su etiqueta */
 .price { display: inline-flex; align-items: center; gap: 0.7rem; }
-.price-box {
-  position: relative;
-  display: inline-flex;
-  align-items: center;
-}
-.price-box input {
-  width: 6.5rem;
-  padding: 0.32rem 1.6rem 0.32rem 0.7rem;
-  font-size: var(--fs-3);
-  text-align: right;
-  font-variant-numeric: tabular-nums;
-  border-radius: 999px;
-}
-.cur {
-  position: absolute;
-  right: 0.7rem;
-  font-size: var(--fs-2);
-  color: var(--ink-faint);
-  pointer-events: none;
-}
-.price-box input:focus + .cur { color: var(--ink); }
 
 /* precio de catálogo dentro del chip del clásico */
 .chip-price {

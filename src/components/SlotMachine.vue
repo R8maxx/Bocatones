@@ -1,8 +1,13 @@
 <script setup>
-import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue'
+import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import { personEmoji } from '../composables/usePersonEmoji.js'
 import { useModal } from '../composables/useModal.js'
+import { useDragToDismiss } from '../composables/useDragToDismiss.js'
 import { useMe } from '../composables/useMe.js'
+import { animate, createTimeline, cubicBezier, utils } from 'animejs'
+import { reducedMotion } from '../motion.js'
+import { CURVE, LEVER_SPRING } from '../animate.js'
+import PctValue from './PctValue.vue'
 
 /*
  * SlotMachine — tragaperras para sortear quién recoge los bocatas.
@@ -24,21 +29,55 @@ const props = defineProps({
 const emit = defineEmits(['close', 'pull', 'again', 'toggle'])
 
 const REEL_CELL = 64 // alto de cada celda (px) — debe coincidir con el CSS
-const reducedMotion =
-  typeof window !== 'undefined' &&
-  window.matchMedia &&
-  window.matchMedia('(prefers-reduced-motion: reduce)').matches
+
+/*
+ * Si la pestana no esta a la vista, las bombillas se paran.
+ *
+ * El comentario del CSS ya decia que pasaba esto, pero era mentira: no habia
+ * ningun listener. Son 16 elementos repintando background y box-shadow en
+ * bucle, y en una pestana de fondo eso es gasto de bateria a cambio de nada
+ * que nadie ve.
+ */
+const tabHidden = ref(document.visibilityState === 'hidden')
+const onVisibility = () => {
+  tabHidden.value = document.visibilityState === 'hidden'
+}
+onMounted(() => document.addEventListener('visibilitychange', onVisibility))
+onBeforeUnmount(() => document.removeEventListener('visibilitychange', onVisibility))
 
 const { isMe } = useMe()
 
 const cabinet = ref(null)
 useModal(cabinet, () => emit('close'))
 
+/*
+ * Tirar de la marquesina hacia abajo cierra la cabina.
+ *
+ * Era el único de los tres modales sin este gesto, y no es una salida nueva: va
+ * al MISMO emit('close') que la ✕, el velo y Escape.
+ *
+ * `wrap` va en .rig y NO en .cabinet, y eso no es una preferencia: .cabinet
+ * lleva `animation: drop-in ... both`, o sea con relleno, así que la animación
+ * sigue «en efecto» para siempre y una animación CSS en efecto le gana al estilo
+ * en línea en la cascada — el transform del arrastre no se vería. Es el choque
+ * que documenta base.css:366-373. En .rig, que no tiene transform propio,
+ * anime.js escribe a gusto y el CSS sigue mandando dentro de la cabina.
+ *
+ * Y de paso sale bien: la palanca es HERMANA de la cabina dentro de .rig, así
+ * que las dos se arrastran como la sola pieza que son.
+ *
+ * `handle` va en .topper, que es la cabecera natural y —esto es lo importante—
+ * NO contiene la palanca: `trigger` limita el gesto ahí, así que el
+ * setPointerCapture de la palanca y su swallowClick siguen intactos.
+ */
+const { wrap, handle } = useDragToDismiss(() => emit('close'))
+
 const phase = ref('ready') // 'ready' | 'spinning' | 'done'
 const armed = ref(false) // palanca tirada (esperando/girando)
-const translated = ref(false) // dispara el desplazamiento de los rodillos
 const reels = ref([])
-let finishTimer = null
+// los elementos .strip, uno por rodillo (ver la nota del :ref en la plantilla)
+const strips = ref([])
+let spin = null
 
 const winnerEmoji = computed(() => (props.draw ? personEmoji(props.draw.winner) : '🥪'))
 
@@ -60,6 +99,171 @@ const inPlay = computed(() => {
 const awayCount = computed(() => oddsList.value.filter((o) => o.available === false).length)
 const canPull = computed(() => inPlay.value.length >= 2)
 
+/* ----------------------------------------------------------------
+   Tirar de la palanca de verdad.
+
+   El brazo no se desplaza: PIVOTA sobre el buje (transform-origin: 50% 100%).
+   Por eso el gesto no es un arrastre de la libreria —que moveria el elemento de
+   sitio— sino unos manejadores de puntero propios que mapean el recorrido a
+   grados. 120px de dedo son 72 grados, el tope de siempre.
+
+   Y hay UN SOLO sitio que escribe el giro (el style.transform de aqui) y UN
+   SOLO muelle que lo devuelve, compartido por el dedo y por el clic. Antes eran
+   dos mecanismos peleados: el dedo escribia un estilo en linea y el clic
+   disparaba un @keyframes `yank`, que al ser una animacion CSS pisaba el estilo
+   en linea; de ahi el flag `dragging`, la clase `.pulled` y los 72 grados
+   escritos a mano en el CSS Y en el JS, que habia que mantener iguales. Todo eso
+   se ha ido: MAX_DEG es la unica copia.
+
+   El muelle es lo unico "blando" que se permite en toda la app, y es a
+   proposito: una palanca de tragaperras ES un objeto con muelle. El rebote
+   esta mal en un contador de dinero y bien aqui. Vive en src/animate.js.
+
+   Lo que SI cambia de tacto: el brazo ahora sigue al dedo 1:1. Antes el propio
+   seguimiento iba amortiguado (un useSpring detras del dedo), un retraso de
+   unos 180ms que casi no se veia. anime.js no tiene un muelle continuo que
+   siga a un valor —cada llamada reinicia el tween desde cero— asi que el muelle
+   se queda donde de verdad se ve: en la vuelta y en el clic.
+   ---------------------------------------------------------------- */
+const PULL_PX = 120 // recorrido del dedo para llegar al tope
+const MAX_DEG = 72 // grados del brazo en el tope
+const COMMIT = 0.8 // hay que bajarla al 80% para que cuente como tiron
+
+const arm = ref(null)
+let startY = 0
+
+const setDeg = (deg) => {
+  if (arm.value) arm.value.style.transform = `rotate(${deg}deg)`
+}
+
+const degFor = (px) => (Math.min(Math.max(px, 0), PULL_PX) / PULL_PX) * MAX_DEG
+
+// la vuelta desde donde este. Con movimiento reducido, de golpe: el arrastre en
+// si se queda (lo mueve la persona, no la maquina), lo que se quita es la
+// inercia.
+function springBack() {
+  if (!arm.value) return
+  if (reducedMotion.value) {
+    setDeg(0)
+    return
+  }
+  animate(arm.value, { rotate: 0, ease: LEVER_SPRING })
+}
+
+/*
+ * El camino del CLIC (y del teclado): baja y vuelve a subir, una sola vez.
+ *
+ * Es lo que hacia el @keyframes `yank`, con el mismo perfil (baja en un tercio
+ * del tiempo y sube con muelle) pero por el mismo canal que el dedo.
+ */
+function yank() {
+  if (!arm.value || reducedMotion.value) return
+  animate(arm.value, {
+    rotate: [
+      { to: MAX_DEG, duration: 300, ease: CURVE.out },
+      { to: 0, ease: LEVER_SPRING },
+    ],
+  })
+}
+
+/*
+ * Tragarse el clic que viene detras de un arrastre.
+ *
+ * El navegador sintetiza su `click` en el <button> de todas formas: un tiron
+ * corto (por debajo del umbral) soltaba el brazo con el muelle Y ADEMAS
+ * disparaba el @click del boton, o sea que sorteaba de todas formas. Justo lo
+ * contrario de lo que promete el gesto.
+ *
+ * La marca se pone MIENTRAS se arrastra y no al soltar, porque el clic nativo
+ * puede llegar antes que nuestro pointerup. Y se limpia en el pointerdown, asi
+ * que cada gesto empieza de cero.
+ */
+let swallowClick = false
+
+function onLeverPointerDown() {
+  swallowClick = false
+}
+
+function onLeverClick() {
+  if (swallowClick) {
+    swallowClick = false
+    return
+  }
+  // solo se tira del brazo si el tiron cuenta de verdad; pull() es quien sabe
+  if (pull()) yank()
+}
+
+/*
+ * El gesto, con captura de puntero.
+ *
+ * setPointerCapture es lo que hace que el gesto siga siendo nuestro aunque el
+ * dedo se salga del brazo (que es estrecho: 13px), sin escuchar en `document`.
+ * Y separa de verdad `pointerup` de `pointercancel`: si el navegador se queda el
+ * gesto, la palanca vuelve pero NO sortea.
+ */
+function onArmDown(e) {
+  if (!e.isPrimary) return
+  if (e.pointerType === 'mouse' && e.button !== 0) return
+  if (phase.value !== 'ready' || armed.value || !canPull.value) return
+  swallowClick = false
+  startY = e.clientY
+  arm.value?.setPointerCapture?.(e.pointerId)
+}
+
+// el gesto es nuestro mientras tengamos capturado el puntero
+function holding(e) {
+  return arm.value?.hasPointerCapture?.(e.pointerId)
+}
+
+function onArmMove(e) {
+  if (!holding(e)) return
+  const px = e.clientY - startY
+  // 3px es el minimo con el que esto deja de ser un toque y pasa a ser un
+  // gesto, asi que tocar sigue siendo tocar
+  if (Math.abs(px) > 3) swallowClick = true
+  setDeg(degFor(px))
+}
+
+function onArmUp(e) {
+  if (!holding(e)) return
+  arm.value?.releasePointerCapture?.(e.pointerId)
+  const committed = e.clientY - startY >= PULL_PX * COMMIT
+  springBack()
+  if (committed) pull()
+}
+
+// el navegador se ha quedado el gesto (un gesto del sistema, una llamada
+// entrante): la palanca vuelve a su sitio y no se sortea nada
+function onArmCancel(e) {
+  if (!holding(e)) return
+  arm.value?.releasePointerCapture?.(e.pointerId)
+  springBack()
+}
+
+/*
+ * Cerrar al pulsar el velo, pero solo si el gesto EMPIEZA en el velo.
+ *
+ * Con `@click.self` solo, arrastrar la palanca y soltar fuera de ella cerraba
+ * la maquina: el navegador sintetiza el `click` en el ancestro comun de donde
+ * pulsaste y donde soltaste, y ese ancestro es el propio velo, asi que
+ * `.self` se cumplia. No era culpa del gesto nuevo —pasaba igual arrastrando
+ * el raton por encima de la palanca— pero con una palanca que ahora se
+ * arrastra de verdad se dispararia todo el rato.
+ *
+ * Comprobar el pointerdown es la forma general: un arrastre que sale de
+ * dentro no es un clic en el velo, venga de donde venga.
+ */
+let downOnVeil = false
+
+function onVeilPointerDown(e) {
+  downOnVeil = e.target === e.currentTarget
+}
+
+function onVeilClick(e) {
+  if (e.target === e.currentTarget && downOnVeil) emit('close')
+}
+
+
 // construye la tira de cada rodillo: gente repetida + ganador centrado al final
 function buildReels(people, winnerName) {
   const base = people && people.length ? people : [winnerName]
@@ -79,30 +283,73 @@ function buildReels(people, winnerName) {
   })
 }
 
+/*
+ * La curva del frenado del rodillo. No es un token de la casa a proposito: es
+ * una deceleracion mucho mas larga que cualquier entrada de la interfaz, la que
+ * hace que el rodillo parezca tener peso. Estaba escrita en el CSS de .strip.
+ */
+const REEL_EASE = cubicBezier(0.16, 1, 0.3, 1)
+
+/*
+ * Lo que se espera con el ganador ya en la linea de pago antes de encender la
+ * fiesta. Era un `+ 450` suelto sumado a un setTimeout; ahora es un compas con
+ * nombre dentro de la linea de tiempo.
+ */
+const REVEAL_HOLD = 450
+
 // arranca el giro con un sorteo ya resuelto y aterriza en el ganador
 function startSpin(d) {
   reels.value = buildReels(d.people, d.winner)
-  if (reducedMotion) {
-    translated.value = true
-    phase.value = 'done'
+
+  if (reducedMotion.value) {
+    // sin giro: los rodillos aparecen ya puestos en el ganador
+    nextTick(() => {
+      reels.value.forEach((reel, i) => utils.set(strips.value[i], { y: -reel.offset }))
+      phase.value = 'done'
+    })
     return
   }
+
   phase.value = 'spinning'
-  requestAnimationFrame(() =>
-    requestAnimationFrame(() => {
-      translated.value = true
-    }),
-  )
-  const maxDur = Math.max(...reels.value.map((r) => r.duration))
-  finishTimer = setTimeout(() => (phase.value = 'done'), maxDur + 450)
+
+  /*
+   * nextTick porque los .strip acaban de nacer con el sorteo: hasta que Vue no
+   * los pinta no hay nada que animar. Esto es lo que antes eran dos
+   * requestAnimationFrame anidados, que estaban ahi para forzar un reflujo y
+   * que la transicion CSS arrancara de verdad; anime.js no necesita el truco,
+   * solo necesita el elemento.
+   */
+  nextTick(() => {
+    const maxDur = Math.max(...reels.value.map((r) => r.duration))
+
+    /*
+     * Una sola linea de tiempo posee la secuencia entera: los tres rodillos
+     * arrancan juntos (posicion 0) y cada uno frena cuando le toca, y el
+     * resultado se descubre en su compas. Antes esto eran tres transiciones CSS
+     * sueltas y un setTimeout que tenia que sumar a mano la duracion mas larga.
+     */
+    spin = createTimeline()
+    reels.value.forEach((reel, i) => {
+      spin.add(strips.value[i], { y: -reel.offset, duration: reel.duration, ease: REEL_EASE }, 0)
+    })
+    spin.call(() => {
+      phase.value = 'done'
+    }, maxDur + REVEAL_HOLD)
+  })
 }
 
-// tirar de la palanca → pide el sorteo; el giro arranca cuando llega `draw`
+/*
+ * Tirar de la palanca → pide el sorteo; el giro arranca cuando llega `draw`.
+ *
+ * Devuelve si el tiron ha contado, porque el camino del clic necesita saberlo
+ * para animar el brazo (el del dedo ya lo tiene abajo).
+ */
 function pull() {
-  if (phase.value !== 'ready' || armed.value || !canPull.value) return
+  if (phase.value !== 'ready' || armed.value || !canPull.value) return false
   armed.value = true
   emit('pull')
   if (props.draw) startSpin(props.draw) // por si ya estuviera disponible
+  return true
 }
 
 // cuando llega el resultado tras tirar de la palanca, arranca el giro
@@ -131,13 +378,14 @@ watch(inPlay, (list) => {
 })
 
 onBeforeUnmount(() => {
-  clearTimeout(finishTimer)
+  spin?.revert()
+  spin = null
 })
 </script>
 
 <template>
-  <div class="slot-overlay" @click.self="emit('close')">
-    <div class="rig">
+  <div class="slot-overlay" @pointerdown="onVeilPointerDown" @click="onVeilClick">
+    <div ref="wrap" class="rig">
       <div
         ref="cabinet"
         class="cabinet"
@@ -149,6 +397,10 @@ onBeforeUnmount(() => {
       >
         <button class="x" type="button" aria-label="cerrar" @click="emit('close')">✕</button>
 
+        <!-- la pista de que se puede tirar. Entre los dos tornillos de arriba se
+             lee como una ranura del chasis, que es justo lo que queremos. -->
+        <span class="modal-grabber" aria-hidden="true" />
+
         <!-- tornillos del chasis -->
         <span class="screw tl" aria-hidden="true" />
         <span class="screw tr" aria-hidden="true" />
@@ -156,12 +408,16 @@ onBeforeUnmount(() => {
         <span class="screw br" aria-hidden="true" />
 
         <!-- marquesina con bombillas -->
-        <div class="topper">
-          <span class="bulbs" aria-hidden="true">
+        <!-- .modal-grab trae el cursor y, sobre todo, el `touch-action` con su
+             !important: anime.js escribe `pan-x` EN LÍNEA sobre el trigger al
+             armar el arrastre, y eso se llevaría por delante el pinch-zoom
+             (la razón entera está en base.css:288-299) -->
+        <div ref="handle" class="topper modal-grab">
+          <span class="bulbs" :class="{ paused: tabHidden }" aria-hidden="true">
             <i v-for="n in 8" :key="n" :style="{ '--i': n }" />
           </span>
           <h3 id="slot-title"><span aria-hidden="true">🍀</span> ¿QUIÉN RECOGE? <span aria-hidden="true">🍀</span></h3>
-          <span class="bulbs" aria-hidden="true">
+          <span class="bulbs" :class="{ paused: tabHidden }" aria-hidden="true">
             <i v-for="n in 8" :key="n" :style="{ '--i': n }" />
           </span>
         </div>
@@ -173,14 +429,15 @@ onBeforeUnmount(() => {
           <div class="reels-frame">
             <div class="reels" :class="{ spinning: phase === 'spinning' }">
               <div class="payline" aria-hidden="true" />
+              <!--
+                El :ref es una funcion y no un ref="strips" a secas porque Vue
+                NO garantiza que el array de un ref dentro de un v-for salga en
+                el orden de la lista, y aqui el indice ES el rodillo: el 0 frena
+                antes que el 1. El transform lo escribe anime.js (ver startSpin),
+                asi que aqui no hay estilo en linea.
+              -->
               <div v-for="(reel, i) in reels" :key="i" class="reel">
-                <div
-                  class="strip"
-                  :style="{
-                    transform: `translateY(-${translated ? reel.offset : 0}px)`,
-                    transitionDuration: reducedMotion ? '0ms' : reel.duration + 'ms',
-                  }"
-                >
+                <div class="strip" :ref="(el) => (strips[i] = el)">
                   <div v-for="(name, j) in reel.strip" :key="j" class="cell">
                     <span class="cell-emoji">{{ personEmoji(name) }}</span>
                     <span class="cell-name">{{ name }}</span>
@@ -214,7 +471,19 @@ onBeforeUnmount(() => {
                 </p>
                 <!-- papeletas a la vista: quien menos ha ido, más probabilidad.
                      Cada fila se puede pulsar para marcar que hoy no puede ir. -->
-                <ul v-if="oddsList.length" class="odds" aria-label="probabilidades del sorteo">
+                <!--
+                  oddsList se reordena en CADA toggle de disponibilidad: los
+                  disponibles primero y luego por probabilidad. Sin esto las
+                  filas saltaban a su sitio nuevo. Con -move se deslizan, y a la
+                  vez los porcentajes ruedan: es el mismo gesto contado dos veces.
+                -->
+                <TransitionGroup
+                  v-if="oddsList.length"
+                  name="list"
+                  tag="ul"
+                  class="odds"
+                  aria-label="probabilidades del sorteo"
+                >
                   <li v-for="o in oddsList" :key="o.name">
                     <button
                       type="button"
@@ -230,12 +499,12 @@ onBeforeUnmount(() => {
                         <span class="odd-bar" aria-hidden="true">
                           <span class="odd-fill" :style="{ '--fill': o.chance }" />
                         </span>
-                        <span class="odd-pct">{{ Math.round(o.chance * 100) }}%</span>
+                        <span class="odd-pct"><PctValue :chance="o.chance" /></span>
                       </template>
                       <span class="odd-gone">{{ o.gone }}× ido</span>
                     </button>
                   </li>
-                </ul>
+                </TransitionGroup>
                 <p v-if="oddsList.length" class="odds-hint">
                   pulsa a quien hoy no pueda ir<template v-if="awayCount"> · {{ awayCount }} fuera</template>
                 </p>
@@ -246,15 +515,32 @@ onBeforeUnmount(() => {
       </div>
 
       <!-- palanca EXTERNA accionable: tírala para girar -->
+      <!--
+        Sigue siendo un <button> con @click: Enter, Espacio y el toque seco
+        funcionan igual que antes. Por encima de 3px el gesto se come el clic
+        (swallowClick), asi que tocar es tocar y arrastrar es arrastrar en el
+        mismo sitio.
+
+        El giro del brazo lo escribe el JS y solo el JS: ya no hay una clase
+        .pulled con un @keyframes peleandose con el estilo en linea.
+      -->
       <button
         class="lever"
         type="button"
-        :class="{ pulled: armed, ready: phase === 'ready' && !armed }"
+        :class="{ ready: phase === 'ready' && !armed }"
         :aria-label="phase === 'ready' && !armed ? 'Tirar de la palanca para girar' : 'palanca'"
-        @click="pull"
+        @pointerdown="onLeverPointerDown"
+        @click="onLeverClick"
       >
         <span class="lever-mount" />
-        <span class="lever-arm">
+        <span
+          ref="arm"
+          class="lever-arm"
+          @pointerdown="onArmDown"
+          @pointermove="onArmMove"
+          @pointerup="onArmUp"
+          @pointercancel="onArmCancel"
+        >
           <span class="lever-rod" />
           <span class="lever-ball" />
         </span>
@@ -491,8 +777,9 @@ onBeforeUnmount(() => {
 .strip {
   display: flex;
   flex-direction: column;
-  transition-property: transform;
-  transition-timing-function: cubic-bezier(0.16, 1, 0.3, 1); /* ease-out, decelera al parar */
+  /* el desplazamiento y su curva los pone anime.js (ver REEL_EASE en el script):
+     un rodillo que frena no es una transicion de interfaz, es una secuencia con
+     tres tiempos distintos que tiene que acabar cuando le toca */
 }
 .cell {
   height: 64px;
@@ -569,6 +856,13 @@ onBeforeUnmount(() => {
   cursor: default;
 }
 .lever.ready { cursor: pointer; }
+/* sin esto, arrastrar la palanca en tactil scrollearia la pagina en vez de
+   mover el brazo. Se puede poner sin miedo: el unico scroller interno de la
+   maquina es .odds, que NO es ancestro de la palanca, y useModal deja el body
+   en overflow:hidden mientras el modal esta abierto. */
+.lever { touch-action: none; }
+.lever.ready .lever-arm { cursor: grab; }
+.lever.ready .lever-arm:active { cursor: grabbing; }
 /* caja/buje donde gira la palanca, anclada a la cabina */
 .lever-mount {
   position: absolute;
@@ -627,13 +921,9 @@ onBeforeUnmount(() => {
   0%, 100% { transform: translateX(-50%) translateY(0); }
   50% { transform: translateX(-50%) translateY(-5px); }
 }
-/* al arrancar: tira hacia abajo y vuelve a subir, una sola vez */
-.lever.pulled .lever-arm { animation: yank 0.85s cubic-bezier(0.3, 1.2, 0.4, 1) both; }
-@keyframes yank {
-  0% { transform: rotate(0deg); }
-  35% { transform: rotate(72deg); } /* baja */
-  100% { transform: rotate(0deg); } /* sube de nuevo */
-}
+/* el tiron (con el dedo o con el raton) lo anima anime.js sobre este mismo
+   elemento: un solo muelle para los dos caminos, y los grados del tope viven
+   solo en MAX_DEG. Aqui queda el estado de reposo, que es el de arriba. */
 
 /* ---- bandeja de premios ---- */
 .tray {
@@ -661,6 +951,8 @@ onBeforeUnmount(() => {
   border: 1px dashed var(--line-2);
   border-radius: var(--radius);
 }
+/* relative porque .list-leave-active saca al que se va con position: absolute */
+.odds { position: relative; }
 .odds li { display: block; }
 .odd {
   width: 100%;
@@ -721,7 +1013,11 @@ onBeforeUnmount(() => {
 .odd-gone { text-align: right; font-size: var(--fs-1); color: var(--ink-faint); white-space: nowrap; }
 
 /* 16 bombillas repintando en bucle: se paran si la pestaña no está visible y
-   con reduced-motion, que aquí importa por fotosensibilidad además de por gusto */
+   con reduced-motion, que aquí importa por fotosensibilidad además de por gusto.
+   Lo de la pestaña lo pone .paused, que lo enciende el visibilitychange del
+   script: antes esta línea lo prometía y no lo cumplía nadie. */
+.bulbs.paused i { animation-play-state: paused; }
+
 @media (prefers-reduced-motion: reduce) {
   .bulbs i { animation: none !important; background: var(--metal-hi) !important; box-shadow: none !important; }
 }

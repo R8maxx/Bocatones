@@ -1,5 +1,6 @@
 <script setup>
 import { useNotices } from '../composables/useNotices.js'
+import { vSwipe } from '../composables/useSwipeToDismiss.js'
 
 /*
  * Notices — pila de avisos del sistema, abajo a la izquierda.
@@ -14,6 +15,28 @@ import { useNotices } from '../composables/useNotices.js'
 const { notices, dismiss, undo } = useNotices()
 
 const ICON = { error: '⚠', ok: '✓', undo: '🗑️' }
+
+/* ----------------------------------------------------------------
+   Deslizar para descartar.
+
+   Solo en los avisos `error` y `ok`, NUNCA en los `undo`, y no es una
+   limitacion estetica: dismiss() limpia el temporizador SIN disparar ni
+   onUndo ni onExpire (useNotices.js), asi que descartar un aviso de
+   deshacer dejaria el pedido oculto en local y vivo en el servidor —
+   reaparece al recargar. Hoy no se puede llegar ahi porque la plantilla
+   solo pinta la ✕ en los que no son `undo`; esto mantiene esa promesa.
+   Un `undo` se resuelve con su boton, que dice lo que hace.
+
+   La direccion ya la dice el componente: la entrada y la salida viajan a
+   la izquierda, asi que deslizar a la izquierda es "fuera". Se acepta en
+   los dos sentidos porque a un pulgar no se le pide puntería.
+
+   El gesto en si lo pone la directiva v-swipe, que es quien puede montarlo
+   elemento a elemento dentro del v-for: los umbrales y el vuelo de salida
+   viven alli (src/composables/useSwipeToDismiss.js). Aqui solo queda QUIEN
+   puede deslizarse.
+   ---------------------------------------------------------------- */
+const canSwipe = (n) => n.kind !== 'undo'
 </script>
 
 <template>
@@ -23,6 +46,7 @@ const ICON = { error: '⚠', ok: '✓', undo: '🗑️' }
         <div
           v-for="n in notices"
           :key="n.id"
+          v-swipe="canSwipe(n) ? () => dismiss(n.id) : null"
           class="notice"
           :class="n.kind"
           :role="n.kind === 'error' ? 'alert' : 'status'"
@@ -77,6 +101,16 @@ const ICON = { error: '⚠', ok: '✓', undo: '🗑️' }
   box-shadow: var(--shadow-lg);
   pointer-events: auto;
 }
+/* se puede empujar: el cursor lo dice. Los `undo` no se deslizan (v-swipe los
+   deja sin gesto), asi que tampoco lo anuncian. */
+.notice:not(.undo) { cursor: grab; }
+.notice:not(.undo):active { cursor: grabbing; }
+/* anime.js escribe `touch-action: pan-y` en linea al armar el gesto (le deja al
+   navegador el eje que no usa), y eso se lleva por delante el zoom de dos dedos.
+   El !important es lo unico que le gana a un estilo en linea. Mismo motivo y
+   misma solucion que en .modal-grab (base.css). */
+.notice { touch-action: pan-y pinch-zoom !important; }
+
 .notice.error { border-left-color: var(--g6); }
 .notice.ok { border-left-color: var(--g5); }
 .notice.undo { border-left-color: var(--g3); }
@@ -130,9 +164,19 @@ const ICON = { error: '⚠', ok: '✓', undo: '🗑️' }
 @keyframes n-drain { to { transform: scaleX(0); } }
 
 .notice-enter-active,
-.notice-leave-active { transition: transform 0.25s cubic-bezier(0.2, 0.9, 0.2, 1), opacity 0.25s; }
+.notice-leave-active { transition: transform var(--dur-3) var(--ease-inout), opacity var(--dur-3); }
 .notice-enter-from { transform: translateX(-1rem); opacity: 0; }
 .notice-leave-to { transform: translateX(-1rem); opacity: 0; }
+/*
+ * Faltaba: cuando un aviso se iba, los que quedaban daban un salto seco. Y con
+ * el deslizamiento se nota mucho mas, porque ahora los avisos se van a mano.
+ *
+ * Nota sobre lo que se ve al descartar deslizando: el gesto escribe el transform
+ * EN LINEA, que le gana al de .notice-leave-to, asi que la salida la manda la
+ * directiva: el aviso sale volando por donde lo has echado y se apaga a la vez,
+ * en los mismos --dur-3 que esta transicion. Se lee como "lanzado y apagado".
+ */
+.notice-move { transition: transform var(--dur-3) var(--ease-out); }
 
 @media (prefers-reduced-motion: reduce) {
   .n-bar { animation: none; opacity: 0.25; }

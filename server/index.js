@@ -237,6 +237,8 @@ const q = {
 
   // --- pagador (quién puso el dinero) ---
   payerOf: db.prepare(`SELECT person, source FROM (${DAY_PAYER}) WHERE day = ?`),
+  // todos los días con acreedor conocido, para el repaso del arranque
+  payerDays: db.prepare(`SELECT day FROM (${DAY_PAYER}) WHERE person IS NOT NULL`),
   setPayer: db.prepare(`
     INSERT INTO payers (day, person, at) VALUES (?, ?, ?)
     ON CONFLICT(day) DO UPDATE SET person = excluded.person, at = excluded.at
@@ -473,6 +475,19 @@ function syncAutoPaid(day) {
   return { payer, changed }
 }
 
+/*
+ * Repaso de arranque: syncAutoPaid solo corre cuando PASA algo (sorteo, cambio
+ * de pagador, pedido nuevo), así que un día cuyo pagador se fijó antes de que
+ * existiera esta lógica se queda colgado en la deuda de quien puso el dinero
+ * para siempre — el aviso "pusiste el dinero: tu X sigue sin marcar" que no se
+ * va nunca. Al arrancar se pasa por todos los días con acreedor.
+ *
+ * Puede correr en cada arranque sin miedo: es idempotente, respeta el veto
+ * (paid_auto = 2) y no desmarca nada puesto a mano. Sin broadcast: al arrancar
+ * todavía no hay nadie conectado.
+ */
+const resyncAutoPaid = () => q.payerDays.all().reduce((n, r) => n + syncAutoPaid(r.day).changed, 0)
+
 // pagador de un día, en la forma que viaja por REST y por el WebSocket.
 // `settled` y `auto` van dentro a propósito: cambiar el pagador NO reescribe lo
 // que ya estaba cobrado, y eso hay que poder contarlo.
@@ -634,6 +649,13 @@ app.put('/api/orders/:id', (req, res) => {
     b.paid === undefined ? existing.paidAuto : !paid && existing.paidAuto === 1 ? 2 : 0
 
   q.updateOrder.run(keep('person', 40), filling, keep('bread', 40), keep('notes', 80), size, price, paid, paidAt, paidAuto, req.params.id)
+  // renombrar cambia de quién es la deuda, así que hay que repasar el
+  // auto-pagado del día: un pedido anónimo al que luego le ponen el nombre del
+  // pagador se quedaba debiéndose para siempre. No si el body trae `paid`:
+  // entonces manda la persona y ya se ha resuelto arriba.
+  const renamed =
+    b.person !== undefined && str(b.person, 40).toLowerCase() !== existing.person.toLowerCase()
+  if (b.paid === undefined && renamed) syncAutoPaid(existing.day)
   pushOrders(existing.day, str(b.clientId, 64))
   res.json(q.getOrder.get(req.params.id))
 })
@@ -891,6 +913,9 @@ if (existsSync(dist)) {
   app.use(express.static(dist))
   app.get(/^(?!\/api).*/, (_req, res) => res.sendFile(join(dist, 'index.html')))
 }
+
+const resynced = resyncAutoPaid()
+if (resynced) console.log(`↻  auto-pagado al día: ${resynced} pedido(s) de días antiguos`)
 
 const server = app.listen(PORT, () => {
   console.log(`🥪  bocatones API en http://localhost:${PORT}  (db: ${DB_PATH})`)

@@ -3,6 +3,10 @@ import './assets/main.css'
 import { createApp } from 'vue'
 import App from './App.vue'
 import { vReveal } from './composables/useReveal.js'
+// cablea anime.js a los tokens de movimiento de la casa. Se importa aquí, y no
+// solo desde quien la usa, para que los valores por defecto del motor estén
+// puestos antes de que se monte nada (ver src/animate.js).
+import './animate.js'
 
 createApp(App).directive('reveal', vReveal).mount('#app')
 

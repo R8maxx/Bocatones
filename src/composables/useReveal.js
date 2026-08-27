@@ -6,10 +6,7 @@
  * la clase se pone en el montaje y no se observa nada.
  */
 
-const reduced = () =>
-  typeof window !== 'undefined' &&
-  window.matchMedia &&
-  window.matchMedia('(prefers-reduced-motion: reduce)').matches
+import { prefersReduced } from '../motion.js'
 
 let observer = null
 
@@ -30,7 +27,7 @@ function shared() {
 
 export const vReveal = {
   mounted(el) {
-    if (reduced()) {
+    if (prefersReduced()) {
       el.classList.add('is-revealed')
       return
     }

@@ -1,8 +1,11 @@
 <script setup>
 import { reactive, ref, watch } from 'vue'
 import { useClassics } from '../composables/useClassics.js'
-import { useModal } from '../composables/useModal.js'
+import { useModal, useVeilClose } from '../composables/useModal.js'
+import { useDragToDismiss } from '../composables/useDragToDismiss.js'
 import { toInput, parse } from '../money.js'
+import MoneyInput from './MoneyInput.vue'
+import { DUR, STAGGER } from '../motion.js'
 
 /*
  * PriceList — editor del catálogo de precios (entero y media de cada clásico).
@@ -19,6 +22,13 @@ const { classics, loading, updateClassic } = useClassics()
 
 const panel = ref(null)
 useModal(panel, () => emit('close'))
+
+// arrastrar la cabecera hacia abajo cierra. Mismo cierre que la ✕ y el velo:
+// no es una salida nueva, es la misma puerta con otro pomo.
+const { wrap, handle } = useDragToDismiss(() => emit('close'))
+
+// pulsar el velo cierra, pero solo si el gesto empieza ahi (ver useVeilClose)
+const { onVeilPointerDown, onVeilClick } = useVeilClose(() => emit('close'))
 
 // borradores por id: lo que hay escrito en los inputs
 const drafts = reactive({})
@@ -59,13 +69,34 @@ async function save(c, field) {
 // lo que se cobraría por una media si no está definida a mano
 const autoHalf = (c) => (c.priceWhole === null ? '' : toInput(Math.round(c.priceWhole / 2)))
 
+/*
+ * Cuándo empieza a rodar cada fila.
+ *
+ * --dur-3 es lo que tarda el panel en entrar (base.css, .modal-enter-active):
+ * antes de eso la cifra rodaría por debajo del fundido y no se vería. Y luego
+ * una fila detrás de otra con --stagger, el mismo escalón con el que entran las
+ * filas de la lista de pedidos. Se topa en la 12ª igual que allí: con veinte
+ * clásicos, la última no puede tardar un segundo en arrancar.
+ */
+const rollDelay = (i) => DUR.d3 + Math.min(i, 12) * STAGGER
+
 </script>
 
 <template>
   <div
     class="pl-overlay"
-    @click.self="emit('close')"
+    @pointerdown="onVeilPointerDown"
+    @click="onVeilClick"
   >
+    <!--
+      Esta envoltura existe SOLO para separar dos transforms que se pelean: la
+      entrada y la salida animan `transform` de .modal-panel por CSS, y el
+      arrastre escribe un transform EN LINEA. En el mismo elemento gana el de
+      linea, la salida se queda sin su translateY, y arrastrar durante los
+      280ms de entrada iria con retraso. Aqui el CSS mueve el panel y anime.js
+      mueve la envoltura.
+    -->
+    <div ref="wrap" class="pl-wrap">
     <div
       ref="panel"
       class="pl-panel modal-panel"
@@ -74,7 +105,8 @@ const autoHalf = (c) => (c.priceWhole === null ? '' : toInput(Math.round(c.price
       aria-labelledby="pl-title"
       tabindex="-1"
     >
-      <div class="pl-head">
+      <span class="modal-grabber" aria-hidden="true" />
+      <div ref="handle" class="pl-head modal-grab">
         <h3 id="pl-title"><span class="hash">#</span> precios del catálogo</h3>
         <button class="pl-x" type="button" aria-label="cerrar" @click="emit('close')">✕</button>
       </div>
@@ -92,45 +124,52 @@ const autoHalf = (c) => (c.priceWhole === null ? '' : toInput(Math.round(c.price
         <span>½ media</span>
       </div>
 
+      <!--
+        Los precios entran RODANDO desde 0, fila a fila, justo cuando el panel
+        acaba de aterrizar (ver rollDelay). Es un catálogo de cifras: verlas
+        subir dice de un vistazo que esto es lo que se cobra, y no un formulario
+        vacío más. Ver MoneyInput.
+      -->
       <ul class="pl-rows">
-        <li v-for="c in classics" :key="c.id" class="pl-row">
+        <li v-for="(c, i) in classics" :key="c.id" class="pl-row">
           <span class="pl-name">{{ c.name }}</span>
-          <span class="pl-money" :class="{ busy: saving === c.id }">
-            <input
-              v-model="drafts[c.id].whole"
-              type="text"
-              inputmode="decimal"
-              maxlength="7"
-              placeholder="—"
-              :aria-label="`precio del entero de ${c.name}`"
-              @change="save(c, 'whole')"
-              @blur="save(c, 'whole')"
-            />
-            <span class="pl-cur" aria-hidden="true">€</span>
-          </span>
-          <span class="pl-money" :class="{ busy: saving === c.id }">
-            <input
-              v-model="drafts[c.id].half"
-              type="text"
-              inputmode="decimal"
-              maxlength="7"
-              :placeholder="autoHalf(c) || '—'"
-              :title="c.priceHalf === null && c.priceWhole !== null ? 'mitad del entero (automático)' : ''"
-              :aria-label="`precio de la media de ${c.name}`"
-              @change="save(c, 'half')"
-              @blur="save(c, 'half')"
-            />
-            <span class="pl-cur" aria-hidden="true">€</span>
-          </span>
+          <MoneyInput
+            v-model="drafts[c.id].whole"
+            style="--mi-w: 100%"
+            roll-in
+            :delay="rollDelay(i)"
+            :busy="saving === c.id"
+            placeholder="—"
+            :aria-label="`precio del entero de ${c.name}`"
+            @change="save(c, 'whole')"
+            @blur="save(c, 'whole')"
+          />
+          <MoneyInput
+            v-model="drafts[c.id].half"
+            style="--mi-w: 100%"
+            roll-in
+            :delay="rollDelay(i)"
+            :busy="saving === c.id"
+            :placeholder="autoHalf(c) || '—'"
+            :title="c.priceHalf === null && c.priceWhole !== null ? 'mitad del entero (automático)' : ''"
+            :aria-label="`precio de la media de ${c.name}`"
+            @change="save(c, 'half')"
+            @blur="save(c, 'half')"
+          />
         </li>
       </ul>
 
-      <p v-if="loading && !classics.length" class="pl-empty">cargando catálogo…</p>
-      <p v-else-if="!classics.length" class="pl-empty">
-        Todavía no hay clásicos. Guarda alguno desde el formulario de pedido.
-      </p>
+      <!-- la lista de arriba es hermana, no alternativa: aquí lo que saltaba era
+           el relevo cargando <-> sin clásicos -->
+      <Transition name="swap" mode="out-in">
+        <p v-if="loading && !classics.length" key="loading" class="pl-empty">cargando catálogo…</p>
+        <p v-else-if="!classics.length" key="empty" class="pl-empty">
+          Todavía no hay clásicos. Guarda alguno desde el formulario de pedido.
+        </p>
+      </Transition>
 
       <p class="pl-hint">// media en blanco = la mitad del entero, redondeada</p>
+    </div>
     </div>
   </div>
 </template>
@@ -149,11 +188,18 @@ const autoHalf = (c) => (c.priceWhole === null ? '' : toInput(Math.round(c.price
   backdrop-filter: blur(3px);
 }
 
+/* el ancho se muda aqui: la envoltura es la que ocupa la celda del grid, y si
+   se quedara en `auto` seria un item fit-content y el min(100%,560px) del panel
+   se resolveria contra un padre ya encogido */
+.pl-wrap { width: min(100%, 560px); }
+
 .pl-panel:focus { outline: none; }
 .pl-panel {
-  width: min(100%, 560px);
+  width: 100%;
   max-height: min(86vh, 720px);
   overflow: auto;
+  /* que el final de la lista no arrastre la pagina de debajo */
+  overscroll-behavior-y: contain;
   background: var(--panel);
   border: 1px solid var(--line-2);
   border-radius: var(--radius);
@@ -238,26 +284,8 @@ const autoHalf = (c) => (c.priceWhole === null ? '' : toInput(Math.round(c.price
   white-space: nowrap;
 }
 
-.pl-money { position: relative; display: inline-flex; align-items: center; }
-.pl-money input {
-  width: 100%;
-  min-width: 0;
-  font-family: var(--mono);
-  font-size: var(--fs-3);
-  text-align: right;
-  font-variant-numeric: tabular-nums;
-  color: var(--ink);
-  background: var(--bg);
-  border: 1px solid var(--line-2);
-  border-radius: 999px;
-  padding: 0.3rem 1.5rem 0.3rem 0.6rem;
-  transition: border-color 0.15s;
-}
-.pl-money input::placeholder { color: var(--ink-faint); }
-.pl-money input:focus { border-color: var(--ink); }
-/* guardando: se ve que la petición está en vuelo */
-.pl-money.busy input { border-color: var(--ink-dim); opacity: 0.6; }
-.pl-cur { position: absolute; right: 0.65rem; font-size: var(--fs-2); color: var(--ink-faint); pointer-events: none; }
+/* las dos cajas de precio (borde, € dentro, cifra que rueda y estado de
+   guardado) son MoneyInput: aquí ya no queda nada suyo que decir */
 
 .pl-empty, .pl-hint {
   font-size: var(--fs-2);
@@ -269,10 +297,5 @@ const autoHalf = (c) => (c.priceWhole === null ? '' : toInput(Math.round(c.price
 @media (max-width: 460px) {
   .pl-cols { display: none; }
   .pl-row { grid-template-columns: 1fr 5.4rem 5.4rem; }
-}
-
-@media (prefers-reduced-motion: reduce) {
-  .pl-overlay,
-  .pl-panel { animation: none; }
 }
 </style>

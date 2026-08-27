@@ -27,9 +27,12 @@ const { bg, setBg, reset, PRESETS, DEFAULT_BG } = useTheme()
       </label>
     </div>
 
-    <button v-if="bg !== DEFAULT_BG" type="button" class="reset" @click="reset" title="volver al tema por defecto">
-      reset
-    </button>
+    <!-- era el único v-if de la topbar que aparecía y desaparecía de golpe -->
+    <Transition name="pop">
+      <button v-if="bg !== DEFAULT_BG" type="button" class="reset" @click="reset" title="volver al tema por defecto">
+        reset
+      </button>
+    </Transition>
   </div>
 </template>
 

@@ -10,6 +10,7 @@ import PriceList from './components/PriceList.vue'
 import Notices from './components/Notices.vue'
 import ConfirmDialog from './components/ConfirmDialog.vue'
 import MoneyValue from './components/MoneyValue.vue'
+import NumValue from './components/NumValue.vue'
 import { useOrders } from './composables/useOrders.js'
 import { useDraw } from './composables/useDraw.js'
 import { personEmoji } from './composables/usePersonEmoji.js'
@@ -21,6 +22,9 @@ import { usePeople } from './composables/usePeople.js'
 import { useInlineEdit } from './composables/useInlineEdit.js'
 import { rtStatus, isOnline } from './realtime.js'
 import { confirm, useConfirm } from './composables/useConfirm.js'
+import { animate, stagger, text as animeText } from 'animejs'
+import { CURVE } from './animate.js'
+import { DUR, prefersReduced, reducedMotion } from './motion.js'
 
 const { isMe } = useMe()
 
@@ -227,6 +231,180 @@ function extraText(b) {
   return parts.join(' · ')
 }
 
+/* ----------------------------------------------------------------
+   El nombre de quien recoge SE DESCIFRA, como el título.
+
+   Es el dato más mirado de la portada y entraba con el `swap` genérico: la
+   celebración del sorteo vivía solo dentro de la tragaperras, y el momento «ya
+   se sabe quién baja al bar» no se notaba en la página.
+
+   Va con `scrambleText` de anime.js y NO con la mecánica de GlitchTitle, que
+   colorea letra a letra y sería más vistosa, por dos razones concretas:
+
+    - .pick-name lleva `overflow: hidden; text-overflow: ellipsis`, y esa
+      mecánica pinta un span por letra. La elipsis NO ellipsiza inline-blocks:
+      los recorta a media caja. `scrambleText` escribe un solo nodo de texto, así
+      que la elipsis sigue viva con un nombre largo.
+    - ocho tonos aleatorios compitiendo con el título tres centímetros más arriba
+      es ruido. Aquí el color lo pone un único --g3 que se enfría a saltos,
+      calcado de .nf-hot (base.css:502): el mismo gesto que ya tiene una cifra
+      cuando se mueve. El color sigue viviendo solo en el movimiento.
+
+   Y se dispara al CERRAR la cabina, no al llegar el resultado. useDraw pone el
+   ganador en cuanto llega el mensaje del WebSocket (useDraw.js:56), o sea
+   MIENTRAS los rodillos siguen girando: la tarjeta está entonces detrás del velo
+   de la tragaperras, así que descifrar ahí es tirar el efecto a la basura.
+   Cuando se apunta a mano no hay modal y se descifra al momento.
+   ---------------------------------------------------------------- */
+const pickName = ref(null)
+let pendingReveal = null // nombre pendiente de descifrar
+
+function decode(el, name) {
+  // con movimiento reducido, Vue ya ha pintado el nombre y así se queda
+  if (reducedMotion.value) return
+
+  animate(el, {
+    textContent: animeText.scrambleText({
+      // `text` NO es opcional: scramble.js cachea el textContent original en un
+      // WeakMap la primera vez y no lo vuelve a leer, así que sin esto el
+      // SEGUNDO sorteo se asentaría en el nombre del primero.
+      text: name,
+      chars: '!<>-_\\/[]{}—=+*^?#01ABCDEF$%&@', // los glifos del título
+      from: 'left',
+      cursor: '_', // el cursor del terminal, que ya está en el vocabulario
+      settleDuration: DUR.d3,
+    }),
+    onBegin: () => el.classList.add('is-decoding'),
+    onComplete: () => {
+      el.classList.remove('is-decoding')
+      el.textContent = name
+    },
+  })
+}
+
+/*
+ * El nombre se apunta como PENDIENTE y se descifra cuando se puede, que no es lo
+ * mismo que cuando se sabe. Hay dos motivos para esperar, y los dos pasan:
+ *
+ *  - la tragaperras está abierta: el ganador llega por WebSocket mientras los
+ *    rodillos siguen girando (useDraw.js:56) y la tarjeta está detrás del velo;
+ *  - el span todavía no existe: si se apunta a mano, el nombre cambia con el
+ *    editor en línea abierto, y `swap` va con mode="out-in", así que el modo
+ *    lectura no se monta hasta que el editor termina de salir.
+ *
+ * De ahí que se vigile también `pickName`: en cuanto el elemento aparece, se
+ * gasta lo que hubiera pendiente. Sin esto el caso «lo digo yo» no descifraba
+ * nunca, porque el ref valía null justo en el instante del watch.
+ */
+function flushReveal() {
+  const el = pickName.value
+  if (!pendingReveal || slotOpen.value || !el) return
+  const name = pendingReveal
+  pendingReveal = null
+  decode(el, name)
+}
+
+/*
+ * flush: 'post' para que animate() corra DESPUÉS del parcheo de Vue: el nombre
+ * es un hijo de texto de .pick-name, y si Vue lo escribe después se lleva por
+ * delante lo que estuviera descifrando.
+ *
+ * Y la comparación con el nombre anterior no es de adorno: el reenvío con
+ * announce:true al reconectar (useDraw.js:58) trae un objeto nuevo con el MISMO
+ * nombre, y eso no es un sorteo, no hay nada que celebrar.
+ */
+watch(
+  () => winner.value?.name,
+  (name, before) => {
+    if (!name || name === before) return
+    pendingReveal = name
+    flushReveal()
+  },
+  { flush: 'post' },
+)
+
+// el elemento que aparece (se cierra el editor) y la cabina que se cierra son
+// las dos formas de que un pendiente pase a poder descifrarse
+watch([pickName, slotOpen], flushReveal, { flush: 'post' })
+
+/* ----------------------------------------------------------------
+   Vaciar el día: la cascada de salida.
+
+   Era la acción más destructiva de la app y la más plana de ver. Y no por
+   descuido: `clearAll` oculta los pedidos de golpe (useOrders.js:292), así que
+   `count` pasa a 0 y el <OrderList v-if="count"> se DESMONTA — el
+   <TransitionGroup> de dentro se va con él y las salidas de las filas no llegan
+   a jugarse nunca. La lista desaparecía sin más.
+
+   El sitio donde sí se puede animar es el @leave del <Transition> que envuelve
+   los tres estados de la cola: ahí el elemento todavía está en el DOM, con sus
+   filas dentro, y Vue espera a que se llame a done().
+
+   Esto es anime.js por la puerta principal de la doctrina (base.css:349): una
+   secuencia con varios tiempos sobre N elementos, que el CSS no sabe cerrar
+   —el escalonado de CSS vive en `animation-delay`, y aquí las filas se van por
+   el desmontaje del padre, no por una animación propia.
+
+   La frontera con el CSS queda limpia sola:
+     - una baja suelta   -> OrderList sigue montado -> `row-leave` de siempre;
+     - vaciar el día     -> OrderList se va         -> esta cascada.
+   ---------------------------------------------------------------- */
+const clearing = ref(false)
+
+// el flag y no una heurística sobre el número de filas: el @leave también salta
+// al cambiar a la vista de histórico, y allí la cascada sobra (ya se encarga el
+// <Transition name="view"> de fuera). Saber QUIÉN lo pidió es lo único fiable.
+function clearDay() {
+  if (!count.value) return
+  clearing.value = true
+  clearAll()
+}
+
+// lo que dura el barrido entero, sea cual sea el largo de la cola: stagger()
+// reparte un RANGO, no un paso fijo, así que se lee igual con 3 pedidos que con
+// 30 y no hace falta el tope de la 12ª que sí necesita el CSS (OrderList.vue:65)
+const WIPE_SPREAD = 420
+
+function wipeRows(el, done) {
+  const wipe = clearing.value
+  clearing.value = false
+
+  const rows = wipe ? el.querySelectorAll?.('.row') : null
+
+  /*
+   * done() TIENE que llamarse en todos los caminos, o el elemento se queda
+   * montado para siempre y `mode="out-in"` no mete nunca el siguiente.
+   *
+   * Y con retardo, no al vuelo: un hook @leave de dos argumentos le quita a Vue
+   * la detección por transitionend (hasExplicitCallback, runtime-dom), así que
+   * si se llama ya, la salida de `swap` se corta a mitad. --dur-1 es lo que dura
+   * .swap-leave-active (base.css:416).
+   */
+  if (!rows?.length || prefersReduced()) {
+    setTimeout(done, prefersReduced() ? 0 : DUR.d1)
+    return
+  }
+
+  /*
+   * La CAJA no debe apagarse mientras se barren las filas: .swap-leave-active la
+   * funde en 120ms y el barrido dura 620, así que la cascada se jugaría entera
+   * con la lista ya invisible. La clase se la come el desmontaje, no hay que
+   * quitarla. La regla vive en base.css, con el vocabulario.
+   */
+  el.classList.add('wiping')
+
+  animate(rows, {
+    // la misma dirección que `row-leave-to` (OrderList.vue:463): se lee como la
+    // salida de siempre pero escalonada, no como un efecto nuevo
+    x: 40,
+    opacity: 0,
+    duration: DUR.d2,
+    ease: CURVE.out,
+    delay: stagger([0, WIPE_SPREAD]),
+    onComplete: done,
+  })
+}
+
 // ---- copiar lista para el bar ----
 const copied = ref(false)
 let copyTimer = null
@@ -380,7 +558,19 @@ async function copyList() {
             <span v-else key="show" class="pick-body">
               <span class="pick-who">
                 <span class="pick-emoji" aria-hidden="true">{{ winner ? personEmoji(winner.name) : '❔' }}</span>
-                <span class="pick-name">{{ winner ? winner.name : 'nadie aún' }}</span>
+                <!--
+                  role="img" + aria-label, el mismo patrón que MoneyValue (:71) y
+                  por el mismo motivo: mientras se descifra el textContent es
+                  basura, y un segundo nodo .sr-only con el nombre de verdad se
+                  colaría al copiar la tarjeta (aria-hidden no excluye del
+                  portapapeles). Así el nombre se anuncia una vez y bien.
+                -->
+                <span
+                  ref="pickName"
+                  class="pick-name"
+                  :role="winner ? 'img' : undefined"
+                  :aria-label="winner ? winner.name : undefined"
+                >{{ winner ? winner.name : 'nadie aún' }}</span>
               </span>
               <span class="pick-acts">
                 <button
@@ -407,12 +597,28 @@ async function copyList() {
         </div>
 
         <div class="stat-card">
-          <div class="stat-num">{{ String(count).padStart(2, '0') }}</div>
+          <div class="stat-num"><NumValue :value="count" :pad="2" /></div>
           <div class="stat-lbl">{{ count === 1 ? 'bocata en cola' : 'bocatas en cola' }}</div>
         </div>
 
         <!-- dinero: lo de hoy y la deuda que se arrastra de otros días -->
-        <div v-if="count || debts.length || payer" class="money-card">
+        <!--
+          `collapse` y no `rise`: la tarjeta es alta y tiene vecinos debajo, así
+          que lo que molestaba no era la falta de fundido, era el SALTO — el
+          primer pedido del día la metía de golpe y empujaba el recuento.
+
+          La envoltura NO es de adorno. El truco de `collapse` es
+          grid-template-rows: 0fr → 1fr, y eso solo colapsa UN hijo directo: los
+          demás caen en pistas implícitas `auto` y conservan su altura. La
+          tarjeta tiene seis, así que se envuelve para que su hijo único sea
+          ella. Es lo que ya dice base.css, al pie de la letra.
+
+          Sin reindentar lo de dentro, igual que la envoltura de PriceList: son
+          cien líneas y el diff no aporta nada.
+        -->
+        <Transition name="collapse">
+        <div v-if="count || debts.length || payer">
+        <div class="money-card">
           <h2 class="money-head">// la cuenta</h2>
 
           <!-- quién pone el dinero hoy: por defecto quien recoge, corregible -->
@@ -457,12 +663,23 @@ async function copyList() {
             </span>
             <span class="mt-row" :class="dayPending ? 'due' : 'ok'">
               <span class="mt-lbl">{{ dayPending ? 'sin pagar' : 'todo pagado' }}</span>
+              <!--
+                Pagar el último pendiente es el momento que cierra el día, y
+                saltaba de la cifra al ✓ sin nada. La cifra y el ✓ son dos
+                estados del MISMO sitio: es exactamente para lo que existe
+                `swap` (base.css:412). Con `key`, porque para Vue los dos son
+                contenido del mismo span.
+              -->
               <span class="mt-val">
-                <MoneyValue v-if="dayPending" :cents="dayPending" />
-                <template v-else>✓</template>
+                <Transition name="swap" mode="out-in">
+                  <MoneyValue v-if="dayPending" key="due" :cents="dayPending" />
+                  <span v-else key="ok">✓</span>
+                </Transition>
               </span>
             </span>
-            <span class="mt-hint">{{ dayPaidCount }}/{{ count }} pedidos pagados</span>
+            <!-- solo rueda el numerador: es el que se mueve cuando marcas un pago.
+                 El denominador ya rueda dos veces en pantalla (arriba y en [N]). -->
+            <span class="mt-hint"><NumValue :value="dayPaidCount" />/{{ count }} pedidos pagados</span>
           </div>
 
           <!-- tu posición en la cuenta: con nombre y apellidos, no un total ciego -->
@@ -522,10 +739,22 @@ async function copyList() {
 
           <p v-else-if="count" class="debts-clear">✓ nadie arrastra deuda de otros días</p>
         </div>
+        </div>
+        </Transition>
 
-        <div v-if="byFilling.length" v-reveal class="tally">
+        <!-- mismo caso y misma envoltura de hijo único que .money-card -->
+        <Transition name="collapse">
+        <div v-if="byFilling.length">
+        <div v-reveal class="tally">
           <h2 class="tally-head">// recuento para el bar</h2>
-          <ul>
+          <!--
+            byFilling se reordena por cantidad en cada alta y baja
+            (useOrders.js): sin TransitionGroup las filas aparecian,
+            desaparecian y se recolocaban de golpe. `list` y no `rise` porque
+            aqui SI hay vecinos: quien se va sale del flujo y -move puede
+            deslizar a los que quedan en vez de dar el tiron seco.
+          -->
+          <TransitionGroup name="list" tag="ul">
             <li
               v-for="b in byFilling"
               :key="b.filling + '|' + b.bread + '|' + b.notes"
@@ -541,8 +770,10 @@ async function copyList() {
               <span class="t-n">{{ sizeSummary(b) }}</span>
               <span class="t-money"><MoneyValue v-if="b.money" :cents="b.money" /></span>
             </li>
-          </ul>
+          </TransitionGroup>
         </div>
+        </div>
+        </Transition>
       </aside>
     </div>
 
@@ -550,8 +781,11 @@ async function copyList() {
       <div class="orders-head">
         <h2 id="orders-title">
           <span class="hash" aria-hidden="true">#</span> cola de pedidos
-          <span class="ct">[{{ count }}]</span>
+          <span class="ct">[<NumValue :value="count" />]</span>
         </h2>
+        <!-- `pop` y no `rise`: son tres botones, y `pop` es lo que la casa usa
+             para lo pequeño que aparece y desaparece (base.css:399) -->
+        <Transition name="pop">
         <div v-if="count" class="head-actions">
           <button
             class="draw"
@@ -570,15 +804,37 @@ async function copyList() {
             class="clear"
             type="button"
             title="Vaciar el pedido del día — se puede deshacer"
-            @click="clearAll"
+            @click="clearDay"
           >rm -rf *</button>
         </div>
+        </Transition>
       </div>
 
-      <p v-if="error" class="error" role="alert">⚠ servidor no disponible — reintentando… ({{ error }})</p>
+      <Transition name="rise">
+        <p v-if="error" class="error" role="alert">⚠ servidor no disponible — reintentando… ({{ error }})</p>
+      </Transition>
 
+      <!--
+        El relevo de los tres estados de la cola. Antes los tres eran v-if
+        pelados: al borrar el último pedido la sección saltaba de la lista al
+        ASCII del bocata de golpe, y entre "cargando" y "vacío" tampoco había
+        nada.
+
+        `mode="out-in"` es obligatorio: si dos conviven un instante, la sección
+        pega un salto de altura (la nota de base.css:412-414).
+
+        Las `key` tampoco son opcionales: las dos ramas `.empty` son el MISMO
+        elemento para Vue, así que sin ellas el paso de "cargando" a "vacío" no
+        se anima.
+
+        Y esta envoltura es la que hace posible la cascada del `rm -rf *`: el
+        hook @leave recibe el <OrderList> con sus filas todavía en el DOM, justo
+        antes de desmontarse (ver wipeRows en el script).
+      -->
+      <Transition name="swap" mode="out-in" @leave="wipeRows">
       <OrderList
         v-if="count"
+        key="list"
         :orders="orders"
         :fresh-ids="freshIds"
         @remove="removeOrder"
@@ -586,16 +842,17 @@ async function copyList() {
         @paid="setPaid"
       />
 
-      <div v-else-if="loading" class="empty">
+      <div v-else-if="loading" key="loading" class="empty">
         <p>cargando pedido del día… <span class="blink">_</span></p>
       </div>
 
-      <div v-else class="empty">
+      <div v-else key="empty" class="empty">
         <pre class="ascii" aria-hidden="true">  ___________
  /  BOCATA   \   sin pedidos todavía.
  \___________/   sé el primero en pedir ↑</pre>
         <p>El cursor parpadea. El bar espera. <span class="blink">_</span></p>
       </div>
+      </Transition>
     </section>
 
     </div>
@@ -626,20 +883,44 @@ async function copyList() {
       </p>
     </footer>
 
-    <!-- aviso de pedido entrante: un bocata que cae con su bocadillo de cómic -->
-    <Transition name="toast">
-      <div v-if="toast" :key="toast.id" class="toast" :class="{ 'is-remove': toast.remove }" role="status" aria-live="polite">
-        <div class="bocata" aria-hidden="true">{{ toast.emoji }}</div>
-        <div class="bubble">
-          <span class="bubble-tag">{{ toast.phrase }}</span>
-          <span class="bubble-detail">
-            <b>{{ toast.person || 'alguien' }}</b> {{ toast.verb }} {{ toast.sizeTxt }}{{ toast.filling }}
-            <template v-if="toast.count > 1"> <i>(+{{ toast.count - 1 }} más)</i></template>
-          </span>
-          <span class="bubble-bar" aria-hidden="true" />
+    <!--
+      Aviso de pedido entrante: un bocata que cae con su bocadillo de cómic.
+
+      Teleportado a `body` por lo mismo que la barra compacta (ver arriba): el
+      transform que .page conserva de su animación de arranque la convierte en el
+      bloque contenedor de sus descendientes `fixed`, así que aquí dentro el
+      `top` del aviso se medía desde .page y NO desde la ventana — el aviso se
+      iba con el scroll y en cuanto bajabas un poco ya no se veía. Y de paso: el
+      z-index tampoco valía, porque #app abre contexto de apilamiento con
+      `z-index: var(--z-base)` (main.css) y dejaba a --z-toast compitiendo como
+      un 1 contra todo lo que sí se teleporta.
+
+      Y la clase `under`: la esquina de arriba a la derecha es justo donde sale
+      la barra compacta, así que mientras esa está en pantalla el aviso se sienta
+      debajo de ella en vez de pelearse por el sitio.
+    -->
+    <Teleport to="body">
+      <Transition name="toast">
+        <div
+          v-if="toast"
+          :key="toast.id"
+          class="toast"
+          :class="{ 'is-remove': toast.remove, under: compact }"
+          role="status"
+          aria-live="polite"
+        >
+          <div class="bocata" aria-hidden="true">{{ toast.emoji }}</div>
+          <div class="bubble">
+            <span class="bubble-tag">{{ toast.phrase }}</span>
+            <span class="bubble-detail">
+              <b>{{ toast.person || 'alguien' }}</b> {{ toast.verb }} {{ toast.sizeTxt }}{{ toast.filling }}
+              <template v-if="toast.count > 1"> <i>(+{{ toast.count - 1 }} más)</i></template>
+            </span>
+            <span class="bubble-bar" aria-hidden="true" />
+          </div>
         </div>
-      </div>
-    </Transition>
+      </Transition>
+    </Teleport>
 
     <!--
       Tragaperras: ¿quién recoge los bocatas?
@@ -739,6 +1020,9 @@ async function copyList() {
   display: flex;
   align-items: center;
   gap: var(--sp-3);
+  /* el alto no es decorativo: el aviso del bocata se aparta por debajo usando
+     ese mismo token, y aquí es donde se cumple la promesa */
+  min-height: var(--bar-h);
   padding: var(--sp-2) clamp(0.8rem, 3vw, 2rem);
   font-size: var(--fs-2);
   color: var(--ink-dim);
@@ -934,6 +1218,17 @@ main {
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
+  /* mientras se descifra se enciende en --g3 y se enfría a saltos: es el gesto
+     de .nf-hot (base.css:502) para un dato que se mueve, no uno nuevo */
+  transition:
+    color var(--dur-4) steps(4, jump-none),
+    text-shadow var(--dur-4) steps(4, jump-none);
+}
+.pick-name.is-decoding {
+  color: var(--g3);
+  text-shadow: 0 0 14px color-mix(in srgb, var(--g3) 50%, transparent);
+  /* encender es instantáneo; enfriar es lo que se mira */
+  transition-duration: var(--dur-1);
 }
 .stat-card {
   border: 1px solid var(--line-2);
@@ -946,9 +1241,15 @@ main {
 .stat-num {
   font-family: var(--crt);
   font-size: var(--fs-7);
-  line-height: 0.85;
+  /* era 0.85, y desde que la cifra la pinta NumberFlow ya no era verdad: fuerza
+     line-height: 1 en su propio elemento, asi que el 0.85 solo mentia sobre la
+     altura de la tarjeta */
+  line-height: 1;
   font-variant-numeric: tabular-nums;
   text-shadow: 0 0 20px var(--glow-soft);
+  /* VT323 es muy alta para su em: la mascara por defecto (0.25em) le comia la
+     parte de arriba de las cifras a este tamano */
+  --number-flow-mask-height: 0.14em;
 }
 .stat-lbl {
   font-size: var(--fs-2);
@@ -1127,6 +1428,9 @@ main {
   color: var(--ink-dim);
 }
 .mt-val { font-variant-numeric: tabular-nums; color: var(--ink); }
+/* el paso naranja -> verde (queda algo por pagar -> ya está todo) se funde: es
+   un cambio de estado, no una alarma nueva */
+.mt-lbl, .mt-val { transition: color var(--dur-3) var(--ease-out); }
 .mt-row.due .mt-lbl, .mt-row.due .mt-val { color: var(--g6); font-weight: 700; }
 .mt-row.ok .mt-lbl, .mt-row.ok .mt-val { color: var(--g5); }
 .mt-hint { font-size: var(--fs-1); color: var(--ink-faint); margin-top: 0.15rem; }
@@ -1208,7 +1512,8 @@ main {
   letter-spacing: 0.08em;
   margin-bottom: 0.8rem;
 }
-.tally ul { list-style: none; display: flex; flex-direction: column; gap: 0.55rem; }
+/* relative porque .list-leave-active saca al que se va con position: absolute */
+.tally ul { list-style: none; display: flex; flex-direction: column; gap: 0.55rem; position: relative; }
 .tally-row {
   display: grid;
   grid-template-columns: 1fr 40px auto auto;
@@ -1418,9 +1723,10 @@ main {
 
 /* ---- aviso: bocata con bocadillo de cómic ---- */
 .toast {
+  --toast-top: clamp(0.8rem, 3vw, 1.6rem);
   position: fixed;
   right: clamp(0.8rem, 3vw, 1.6rem);
-  top: clamp(0.8rem, 3vw, 1.6rem);
+  top: var(--toast-top);
   z-index: var(--z-toast);
   display: flex;
   align-items: center;
@@ -1428,7 +1734,14 @@ main {
   max-width: min(92vw, 380px);
   background: transparent; /* sin caja: el protagonista es el bocata */
   pointer-events: none;
+  /* se desplaza con `top`, no con transform: el transform de .toast ya se lo
+     reparten .toast-enter-from y .toast-leave-to, y se pisarían */
+  transition: top 0.28s cubic-bezier(0.2, 0.9, 0.2, 1);
 }
+
+/* con la barra compacta en pantalla, el aviso se sienta debajo de ella. Misma
+   curva y misma duración que la barra, así que bajan y suben a la par */
+.toast.under { top: calc(var(--bar-h) + var(--toast-top)); }
 
 /* el bocata cae dando un bote y luego se balancea */
 .bocata {
@@ -1546,5 +1859,7 @@ main {
 
 @media (prefers-reduced-motion: reduce) {
   .bocata, .bubble, .bubble-bar { animation: none; }
+  /* al aparecer la barra el aviso cambia de sitio, pero sin deslizarse */
+  .toast { transition: none; }
 }
 </style>

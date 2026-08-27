@@ -83,6 +83,11 @@
   /* área mínima de un objetivo táctil (WCAG 2.5.8) */
   --tap: 1.6rem;
 
+  /* alto de la barra compacta. Vive aquí, y no suelto en App.vue, porque lo
+     leen dos reglas que tienen que cuadrar: la barra lo reclama con min-height
+     y el aviso del bocata se aparta justo por debajo de ella. */
+  --bar-h: 2.8rem;
+
   /* ----------------------------------------------------------------
      Sombras y luces derivadas del tema, no absolutas. Antes eran 24
      rgba(0,0,0,X) con 9 alfas distintos y 8 glows blancos fijos, que
@@ -122,6 +127,10 @@
      cuatro tiempos y las mismas tres curvas estaban copiados a mano por
      una veintena de ficheros, asi que dos cosas que aparecen juntas se
      movian a velocidades distintas. Aqui viven una sola vez.
+
+     Su espejo en JavaScript esta en src/motion.js: NumberFlow anima con la
+     Web Animations API, que no sabe leer una custom property. Si se toca
+     algo de aqui, se toca alli.
      ---------------------------------------------------------------- */
   --dur-1: 120ms;   /* color de hover                        */
   --dur-2: 200ms;   /* micro: chips, insignias               */
@@ -232,7 +241,7 @@ body::after {
    * sitio ni de un detalle plegado a 0fr que se quede montado.
    */
   .collapse-enter-from, .collapse-leave-to { grid-template-rows: 1fr !important; opacity: 1 !important; }
-  .list-leave-active, .chip-leave-active, .rise-leave-active { position: static !important; }
+  .list-leave-active, .chip-leave-active, .rise-leave-active, .row-leave-active { position: static !important; }
 }
 
 ::selection {
@@ -261,6 +270,60 @@ button:active:not(:disabled) {
 }
 
 /* ----------------------------------------------------------------
+   Asa para arrastrar un modal y cerrarlo.
+
+   Vive aqui y no en un <style scoped> por lo mismo que el resto de esta
+   seccion: PriceList y ConfirmDialog comparten el gesto EXACTO, y duplicarlo
+   en dos ficheros es como empiezan a separarse.
+
+   `touch-action` es lo que impide que el dedo scrollee el panel Y lo arrastre a
+   la vez: si el CSS no le quita el eje vertical al navegador, el gesto se hace
+   dos veces.
+
+   Y va SOLO en el asa, nunca en la envoltura ni en el panel: touch-action se
+   resuelve como la interseccion de la cadena de ancestros, asi que ponerlo mas
+   arriba le quitaria el scroll vertical al propio panel (y al bloque copiable
+   de ConfirmDialog, que ademas tiene que seguir seleccionandose).
+
+   El !important NO es pereza, es lo unico que funciona aqui. anime.js escribe
+   `touch-action: pan-x` EN LINEA sobre el asa al armar el arrastre (su
+   Draggable.enable(), porque el eje X esta desactivado), y un estilo en linea
+   le gana a una clase... salvo a una declaracion !important del autor, que es
+   lo que dice la cascada. Sin esto, su valor mas estrecho se impone y pierde el
+   pinch-zoom.
+
+   Porque pinch-zoom se le deja A PROPOSITO: `pan-x` a secas mata el zoom de dos
+   dedos que empiece sobre la cabecera, y el zoom es un requisito de
+   accesibilidad, no una preferencia estetica — igual que el anillo de foco.
+   (El otro filtro de los dos dedos esta en useDragToDismiss: su `guard` corta
+   el gesto en cuanto hay mas de un dedo.)
+   ---------------------------------------------------------------- */
+.modal-grab {
+  touch-action: pan-x pinch-zoom !important;
+  cursor: grab;
+  /* arrastrar con raton no debe seleccionar el titulo. SOLO en el asa: el
+     bloque de codigo de ConfirmDialog tiene que seguir siendo copiable. */
+  user-select: none;
+  -webkit-user-select: none;
+}
+.modal-grab:active { cursor: grabbing; }
+
+/*
+ * La pista de que se puede tirar. Decorativa y aria-hidden, NUNCA un boton: un
+ * boton que solo responde al dedo seria una parada de tabulador que no hace
+ * nada. Con teclado ya se sale con Escape y con los botones del dialogo, que es
+ * todo lo que habia antes de esto.
+ */
+.modal-grabber {
+  display: block;
+  width: 2.2rem;
+  height: 3px;
+  margin: 0 auto var(--sp-2);
+  border-radius: var(--radius-pill);
+  background: var(--line-2);
+}
+
+/* ----------------------------------------------------------------
    Vocabulario de movimiento compartido.
 
    Vive aquí y NO en un <style scoped> a propósito: las clases que genera
@@ -270,7 +333,75 @@ button:active:not(:disabled) {
    Regla de la casa, ya aprendida en OrderList: se anima SOLO opacity y
    transform. Nunca `all`, que arrastraba height/margin/padding y hacía
    reflow de la lista entera en cada alta o baja.
+
+   ----------------------------------------------------------------
+   Y cuándo NO se usa este vocabulario: la frontera con anime.js.
+
+   Esto de aquí abajo es el DEFECTO. Entradas, salidas, relevos, listas y
+   reordenados se hacen con <Transition>/<TransitionGroup> y estas clases.
+
+   anime.js (ver src/animate.js) es para dos cosas, y solo dos:
+
+     1) GESTOS: arrastrar, empujar, tirar. Es lo único que el CSS no puede hacer
+        de ninguna forma. Hoy son tres sitios: la palanca de la tragaperras,
+        descartar un aviso deslizándolo y cerrar un modal tirando de su
+        cabecera.
+     2) SECUENCIAS y BUCLES que el CSS no sabe cerrar: el glitch del título (que
+        tiene que durar lo mismo en un monitor de 60 Hz y en uno de 120) y el
+        giro del sorteo, donde tres rodillos frenan en tiempos distintos y el
+        resultado se descubre cuando para el último.
+
+   Si no lo mueve un dedo y no es una secuencia con varios tiempos, es CSS.
+
+   Lo que NO se hace con anime.js: sustituir transiciones que ya funcionan,
+   animar alturas (para eso está `collapse`, más abajo, con grid-template-rows),
+   y muelles de interfaz — el proyecto es seco a propósito, y el único muelle
+   está en la palanca, que ES un objeto con muelle.
+
+   Y las 16 bombillas de la tragaperras siguen siendo @keyframes de CSS aunque
+   sean un bucle: es un parpadeo fijo y escalonado, exactamente lo que el CSS
+   hace mejor. A cambio son las únicas que necesitan pararse a mano cuando la
+   pestaña se oculta (lo de anime.js se para solo).
+
+   Regla práctica cuando se mezclan: anime.js manda en la CAJA, el CSS manda en
+   el CONTENIDO. Los dos escriben `transform`, y en un mismo elemento el estilo
+   en línea gana, pero una animación CSS en curso pisa al estilo en línea — o
+   sea que comparten propiedad y se pelean. En elementos distintos se componen.
+   De ahí la envoltura de los modales, y que la palanca gire el brazo mientras
+   el CSS mueve la bola. Cuando el CSS y el JS se peleaban por el MISMO elemento
+   (el @keyframes `yank` del brazo contra el estilo en línea del dedo) hubo que
+   quitarle el elemento a uno de los dos: ahora el brazo es solo de anime.js.
    ---------------------------------------------------------------- */
+
+/*
+ * theming — el fundido del cambio de tema. LA EXCEPCIÓN de esta sección.
+ *
+ * Aquí sí se animan `background-color`, `color` y `border-color`, que es justo
+ * lo que la regla de arriba prohíbe. El motivo: useTheme.js recalcula la paleta
+ * entera reescribiendo custom properties, y esas NO transicionan — quien lo hace
+ * es el consumidor. Sin esto, cambiar de tema es un corte seco de pantalla
+ * completa, y es el único gesto de la app que repinta TODO.
+ *
+ * Lo que hace que sea aceptable es que está acotada en el tiempo: la clase la
+ * pone useTheme.js sobre <html> justo antes de aplicar el tema y la quita a los
+ * --dur-3. Fuera de ese instante no existe, así que ningún hover de la app paga
+ * el coste de tener transiciones de color puestas.
+ *
+ * Las tres propiedades van ENUMERADAS, nunca `all`: la regla de la casa sigue
+ * valiendo, y `all` se llevaría por delante también height, margin y padding.
+ *
+ * Límite conocido y aceptado: un elemento con su propia `transition` en un
+ * <style scoped> gana por especificidad y no coge esta. En la práctica no se
+ * nota, porque casi todas esas reglas ya animan `background` o `color` por su
+ * cuenta (.row, .paid-btn, .mm-btn, .debt-amount...).
+ */
+.theming,
+.theming * {
+  transition:
+    background-color var(--dur-3) var(--ease-out),
+    color var(--dur-3) var(--ease-out),
+    border-color var(--dur-3) var(--ease-out);
+}
 
 /* fade — lo mínimo: aparecer y desaparecer sin desplazamiento */
 .fade-enter-active,
@@ -315,6 +446,23 @@ button:active:not(:disabled) {
 .swap-leave-active { transition: opacity var(--dur-1) var(--ease-out), transform var(--dur-1) var(--ease-out); }
 .swap-enter-from { opacity: 0; transform: translateY(4px); }
 .swap-leave-to { opacity: 0; transform: translateY(-4px); }
+
+/*
+ * .wiping — la excepcion de `swap`, y la pone anime.js (ver wipeRows en App.vue).
+ *
+ * Al vaciar el dia, las filas se van en cascada una a una y eso dura mas de medio
+ * segundo, mientras que .swap-leave-active funde la CAJA en --dur-1: sin esto la
+ * lista se apaga a los 120ms y el barrido se juega entero sin que se vea.
+ *
+ * Especificidad 0,2,0 contra el 0,1,0 de .swap-leave-to, asi que gana sin
+ * !important. Y vive aqui, con el vocabulario, y no en un <style scoped>, por lo
+ * mismo que el resto de esta seccion: la clase la escribe App.vue sobre la raiz
+ * de OTRO componente.
+ */
+.list.wiping {
+  opacity: 1;
+  transition: none;
+}
 
 /* view — el relevo grande de hoy ↔ histórico, con algo más de recorrido */
 .view-enter-active { transition: opacity var(--dur-3) var(--ease-out), transform var(--dur-3) var(--ease-out); }
@@ -362,3 +510,50 @@ button:active:not(:disabled) {
 .modal-leave-active .modal-panel { transition: opacity var(--dur-2) var(--ease-out), transform var(--dur-2) var(--ease-out); }
 .modal-enter-from .modal-panel { opacity: 0; transform: translateY(12px) scale(0.98); }
 .modal-leave-to .modal-panel { opacity: 0; transform: translateY(6px) scale(0.99); }
+
+/*
+ * nf — cifras que ruedan (NumberFlow).
+ *
+ * Vive aqui y NO en un <style scoped> por el mismo motivo que el resto de esta
+ * seccion: las tres envolturas (MoneyValue, NumValue, PctValue) comparten el
+ * gesto exacto, y triplicarlo en tres ficheros es como empiezan a separarse.
+ *
+ * El gesto: mientras la cifra se mueve se enciende en --g3 y luego se enfria a
+ * saltos hasta la tinta que tenga alrededor. Es la regla de la casa al pie de
+ * la letra — el color solo vive en el movimiento — y es la razon de que --g3
+ * sea una variable y no un amarillo escrito a mano: useTheme.js lo corrige a
+ * 4.5:1 contra --panel en los ocho temas, papel incluido.
+ *
+ * Va con transiciones y no con @keyframes a proposito: una transicion se
+ * reinicia sola cada vez que la clase entra y sale, y aqui puede volver a
+ * entrar antes de que la anterior acabe (dos pedidos seguidos). Con una
+ * animacion habria que quitarla, forzar un reflow y volver a ponerla.
+ *
+ * Y la clase va en el elemento de DENTRO, no en el <span class="money"> de
+ * fuera. No es un detalle: .mm-row.owe :deep(.money) pinta el naranja de la
+ * deuda con especificidad 0,3,0, asi que un .nf-hot (0,1,0) puesto ahi no
+ * llegaria a verse nunca. Puesto dentro, el amarillo gana mientras rueda y al
+ * enfriar hereda el color que le toque en cada sitio.
+ *
+ * text-shadow solo se declara en el estado caliente, nunca se pone a `none`:
+ * es una propiedad heredable y .stat-num tiene su propio halo de 20px, que se
+ * apagaria. Sin declararlo, la transicion sale del valor heredado y vuelve a el.
+ *
+ * Con prefers-reduced-motion queda inerte por dos vias: el bloque de arriba
+ * pone transition-duration a 0.001ms (el host SI esta en el DOM claro, al
+ * contrario que los digitos), y NumberFlow no dispara animationsstart, asi que
+ * la clase no llega a ponerse. Lo que ese bloque NO puede hacer es frenar el
+ * rodillo: `*` no cruza un shadow root. De eso se encarga
+ * respectMotionPreference, que va activado por defecto. No lo desactives.
+ */
+.nf {
+  transition:
+    color var(--dur-4) steps(4, jump-none),
+    text-shadow var(--dur-4) steps(4, jump-none);
+}
+.nf-hot {
+  color: var(--g3);
+  text-shadow: 0 0 9px color-mix(in srgb, var(--g3) 45%, transparent);
+  /* encender es instantaneo; enfriar es lo que se mira */
+  transition-duration: var(--dur-1);
+}
