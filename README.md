@@ -375,6 +375,61 @@ propio mensaje `draw`).
 
 ---
 
+## 🤝 Cómo contribuir
+
+**La regla de oro:** `master` está protegida. Nada entra ahí sin una **Pull
+Request** revisada y aceptada por **[@R8maxx](https://github.com/R8maxx)** — ni un
+push directo bien intencionado, ni un `--force` de madrugada. Si tu cambio no ha
+pasado por una PR, no está en el proyecto.
+
+El flujo de siempre, de principio a fin:
+
+```sh
+# 1. haz un fork desde GitHub (si no tienes acceso de escritura) y clónalo
+git clone https://github.com/<tu-usuario>/Bocatones.git
+cd Bocatones
+npm install
+
+# 2. una rama por cada cosa. Nunca se trabaja sobre master
+git checkout -b fix/lo-que-arreglas
+
+# 3. arranca y pruébalo de verdad
+npm run dev
+
+# 4. commit y subida
+git add -A
+git commit -m "Arregla que los tachados salían en los rodillos"
+git push -u origin fix/lo-que-arreglas
+
+# 5. abre la Pull Request contra master (desde la web, o así)
+gh pr create --base master --fill
+```
+
+**Nombres de rama** — `feat/…` para algo nuevo, `fix/…` para un arreglo, `docs/…`
+para documentación. Si va contra una issue concreta, `issue_<número>` también
+vale: es lo que se viene usando.
+
+**Qué se mira antes de aceptar una PR:**
+
+- 🏗️ Que **`npm run build` compile** sin errores.
+- 🪟 Que esté **probado con dos pestañas abiertas**. Aquí lo primero que se rompe
+  es el tiempo real: si el cambio no viaja por el WebSocket a la otra pantalla,
+  no está terminado.
+- 🧹 Que **no lleguen ficheros que no tocan** — `node_modules/`, `dist/`,
+  `server/*.db`. Ya están en `.gitignore`, pero revísalo antes de empujar.
+- 📖 Que el **README esté al día** si has cambiado la API o los mensajes del
+  WebSocket: las tablas de arriba son el contrato.
+
+**Una PR, una cosa.** Los cambios pequeños se revisan y entran el mismo día; los
+mamotretos de veinte ficheros se quedan abiertos hasta que alguien tenga la tarde
+libre.
+
+¿Has visto un fallo o se te ha ocurrido algo y no vas a programarlo tú? Abre una
+[issue](https://github.com/R8maxx/Bocatones/issues/new/choose): hay un formulario
+para bugs y otro para ideas.
+
+---
+
 <div align="center">
 
 <img src="public/rm-technology-128.png" width="56" height="56" alt="Logotipo de RM Technology" />
