@@ -1,7 +1,8 @@
 <script setup>
 import { ref } from 'vue'
 import { useConfirm } from '../composables/useConfirm.js'
-import { useModal } from '../composables/useModal.js'
+import { useModal, useVeilClose } from '../composables/useModal.js'
+import { useDragToDismiss } from '../composables/useDragToDismiss.js'
 
 /*
  * El diálogo que sustituye a los window.confirm / window.prompt.
@@ -23,10 +24,33 @@ const { pending, acceptConfirm, cancelConfirm } = useConfirm()
 
 const panel = ref(null)
 useModal(panel, cancelConfirm)
+
+/*
+ * Arrastrar = CANCELAR, nunca confirmar, y por el mismo cancelConfirm() que
+ * Escape, el velo y el boton. acceptConfirm no entra aqui a proposito: media app
+ * pregunta antes de hacer algo destructivo (saldar no tiene deshacer barato), y
+ * un gesto amplio que pudiera ACEPTAR seria el peor fallo posible de esta
+ * pantalla.
+ */
+const { wrap, handle } = useDragToDismiss(cancelConfirm)
+
+// pulsar el velo cancela, pero solo si el gesto empieza ahi (ver useVeilClose)
+const { onVeilPointerDown, onVeilClick } = useVeilClose(cancelConfirm)
 </script>
 
 <template>
-  <div v-if="pending" class="cd-overlay" @click.self="cancelConfirm()">
+  <div
+    v-if="pending"
+    class="cd-overlay"
+    @pointerdown="onVeilPointerDown"
+    @click="onVeilClick"
+  >
+    <!--
+      Envoltura solo para separar dos transforms: la entrada y la salida animan
+      `transform` de .modal-panel por CSS y el arrastre lo escribe en linea. En
+      el mismo elemento gana el de linea y la salida pierde su translateY.
+    -->
+    <div ref="wrap" class="cd-wrap">
     <div
       ref="panel"
       class="cd-panel modal-panel"
@@ -36,7 +60,8 @@ useModal(panel, cancelConfirm)
       aria-describedby="cd-text"
       tabindex="-1"
     >
-      <h3 id="cd-title" class="cd-title">
+      <span class="modal-grabber" aria-hidden="true" />
+      <h3 id="cd-title" ref="handle" class="cd-title modal-grab">
         <span class="hash" aria-hidden="true">#</span> {{ pending.title }}
       </h3>
 
@@ -52,6 +77,7 @@ useModal(panel, cancelConfirm)
           {{ pending.confirmLabel }}
         </button>
       </div>
+    </div>
     </div>
   </div>
 </template>
@@ -73,11 +99,17 @@ useModal(panel, cancelConfirm)
 
 /* el foco entra en el panel para que se anuncie el diálogo antes que un botón:
    ahí no queremos anillo. En los controles sí lo pinta :focus-visible. */
+/* el ancho se muda a la envoltura: sin el, bajo place-items:center seria un
+   item fit-content y el min(100%,420px) del panel se resolveria contra un padre
+   ya encogido */
+.cd-wrap { width: min(100%, 420px); }
+
 .cd-panel:focus { outline: none; }
 .cd-panel {
-  width: min(100%, 420px);
+  width: 100%;
   max-height: min(86vh, 720px);
   overflow: auto;
+  overscroll-behavior-y: contain;
   background: var(--panel);
   border: 1px solid var(--line-2);
   border-radius: var(--radius);
@@ -122,6 +154,9 @@ useModal(panel, cancelConfirm)
   border: 1px solid var(--line);
   border-radius: var(--radius);
   user-select: all;
+  /* su scroll no se escapa al panel. NO lleva touch-action ni user-select
+     propios: tiene que seguir scrolleando con el dedo y seleccionandose entero */
+  overscroll-behavior-y: contain;
 }
 
 .cd-actions {
@@ -140,7 +175,11 @@ useModal(panel, cancelConfirm)
   border-radius: var(--radius);
   padding: 0.4rem 0.9rem;
   cursor: pointer;
-  transition: color 0.18s, background 0.18s, border-color 0.18s, box-shadow 0.18s;
+  transition:
+    color var(--dur-2) var(--ease-out),
+    background var(--dur-2) var(--ease-out),
+    border-color var(--dur-2) var(--ease-out),
+    box-shadow var(--dur-2) var(--ease-out);
 }
 .cd-btn.cancel {
   color: var(--ink-dim);
@@ -164,8 +203,4 @@ useModal(panel, cancelConfirm)
   border-color: var(--g1);
 }
 .cd-btn.ok.danger:hover { box-shadow: 0 0 22px -4px var(--g1); }
-
-@media (prefers-reduced-motion: reduce) {
-  .cd-overlay, .cd-panel { animation: none; }
-}
 </style>

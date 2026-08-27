@@ -210,6 +210,12 @@ conserva y no se redirige**, para no dejar a nadie fuera de golpe.
 
 **Frontend:** Vue 3 (`<script setup>`) + Vite.
 **Backend:** Express + SQLite integrado de Node (`node:sqlite`) — sin dependencias nativas.
+**Movimiento:** tres capas con la frontera escrita en `base.css`. El **CSS** hace
+las entradas, salidas y estados (`@keyframes` y las clases de `<Transition>`);
+**anime.js** hace lo que el CSS no puede cerrar, y solo eso — los gestos (tirar
+de un modal, deslizar un aviso, la palanca) y las secuencias con varios tiempos
+(el glitch del título, el giro del sorteo); y **NumberFlow** hace las cifras, que
+ruedan dígito a dígito en vez de interpolarse.
 **Tiempo real:** WebSocket (`ws`).
 **PWA:** manifest + service worker escritos a mano, sin workbox ni plugins: los
 assets ya salen del build con hash, así que la estrategia cabe en un fichero.
@@ -230,6 +236,8 @@ bocatones/
    ├─ App.vue               # layout, avisos (toasts), estado de conexión, vista hoy/histórico
    ├─ api.js                # cliente HTTP + clientId + día local
    ├─ money.js              # euros ⇄ céntimos (formato y parseo)
+   ├─ motion.js             # tokens de movimiento en JS + prefers-reduced-motion
+   ├─ animate.js            # anime.js atado a esos tokens (curvas, muelle, motor)
    ├─ realtime.js           # WebSocket único con reconexión automática
    ├─ assets/               # tema CRT (base.css) y layout (main.css)
    ├─ components/
@@ -239,7 +247,10 @@ bocatones/
    │  ├─ SlotMachine.vue    # tragaperras del sorteo, con las papeletas a la vista
    │  ├─ HistoryPanel.vue   # modo histórico: días, por persona, a quién le toca
    │  ├─ PriceList.vue      # editor del catálogo de precios
-   │  ├─ MoneyValue.vue     # importe que cuenta hasta su valor nuevo
+   │  ├─ MoneyValue.vue     # importe que RUEDA hasta su valor nuevo (NumberFlow)
+   │  ├─ MoneyInput.vue     # caja de precio editable, con la cifra rodando
+   │  ├─ NumValue.vue       # contador entero que rueda
+   │  ├─ PctValue.vue       # porcentaje que rueda
    │  ├─ Notices.vue        # avisos: errores, confirmaciones y deshacer
    │  ├─ ConfirmDialog.vue  # el diálogo de la casa (adiós window.confirm)
    │  └─ ThemePicker.vue    # selector de color de fondo
@@ -251,10 +262,12 @@ bocatones/
       ├─ useHistory.js      # modo histórico (carga perezosa)
       ├─ useClassics.js     # catálogo de clásicos y sus precios
       ├─ useNotices.js      # canal de avisos del sistema
-      ├─ useModal.js        # foco, focus trap y Escape de los diálogos
+      ├─ useModal.js        # foco, focus trap, Escape y cierre por el velo
       ├─ useMe.js           # quién eres tú, para distinguir lo tuyo
-      ├─ useCountUp.js      # interpolación de los importes
       ├─ useReveal.js       # directiva v-reveal (entrar en pantalla)
+      ├─ useDragToDismiss.js # tirar de un modal hacia abajo para cerrarlo
+      ├─ useSwipeToDismiss.js # directiva v-swipe (descartar un aviso)
+      ├─ useInlineEdit.js   # edición en línea compartida
       ├─ useSettle.js       # confirmación de saldar, compartida
       ├─ usePersonEmoji.js  # emoji determinista por nombre
       └─ useTheme.js        # tema/color persistente por navegador

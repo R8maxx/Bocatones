@@ -1,7 +1,10 @@
 <script setup>
-import { ref, reactive, nextTick } from 'vue'
-import { fmt, toInput, parse } from '../money.js'
+import { ref, reactive, computed, watch } from 'vue'
+import { toInput, parse } from '../money.js'
+import MoneyValue from './MoneyValue.vue'
+import MoneyInput from './MoneyInput.vue'
 import { useMe } from '../composables/useMe.js'
+import { usePeople } from '../composables/usePeople.js'
 
 defineProps({
   orders: { type: Array, required: true },
@@ -12,9 +15,37 @@ const emit = defineEmits(['remove', 'update', 'paid'])
 
 const { isMe } = useMe()
 
+/*
+ * La misma lista de nombres que el formulario de alta. Corregir un nombre mal
+ * escrito es justo el motivo por el que se edita un pedido, y hasta ahora era
+ * el unico sitio donde se escribia a ciegas: sin el datalist, arreglar "maria"
+ * podia dejar un tercer nombre nuevo y partir la deuda otra vez (ver el
+ * comentario de OrderForm sobre Maria/maria).
+ */
+const { people: knownPeople } = usePeople()
+
 const editingId = ref(null)
 const draft = reactive({ person: '', filling: '', bread: '', notes: '', size: 'whole', price: '' })
 const firstInput = ref(null)
+const saving = ref(false) // peticion en vuelo: evita el doble envio
+
+const canSave = computed(() => draft.filling.trim().length > 0)
+
+/*
+ * El foco se pone cuando el campo APARECE, no en un nextTick despues de abrir.
+ *
+ * Es el mismo truco (y por el mismo motivo) que documenta useInlineEdit: el
+ * relevo va con <Transition mode="out-in">, asi que primero tiene que salir la
+ * vista normal y el formulario no se monta hasta que esa salida termina. En el
+ * nextTick el ref todavia esta vacio y no se enfocaba nada.
+ *
+ * Dentro de un v-for Vue guarda los refs en un array, de ahi el desenvuelto.
+ */
+watch(firstInput, (node) => {
+  if (!editingId.value) return
+  const target = Array.isArray(node) ? node[0] : node
+  target?.focus()
+})
 
 function num(i) {
   return String(i + 1).padStart(2, '0')
@@ -28,7 +59,7 @@ function paidTitle(o) {
   return 'pagado — pulsa para marcar como pendiente'
 }
 
-async function startEdit(o) {
+function startEdit(o) {
   editingId.value = o.id
   draft.person = o.person
   draft.filling = o.filling
@@ -36,112 +67,266 @@ async function startEdit(o) {
   draft.notes = o.notes
   draft.size = o.size || 'whole'
   draft.price = toInput(o.price)
-  await nextTick()
-  firstInput.value?.[0]?.focus()
+  // el foco lo pone el watch de firstInput, cuando el campo llegue al DOM
 }
 
 function cancel() {
   editingId.value = null
 }
 
-function save(id) {
-  if (!draft.filling.trim()) return // el relleno es obligatorio
+/*
+ * Guardar y ESPERAR, como hace el formulario de alta.
+ *
+ * Antes esto cerraba el editor en el mismo tick en que emitia, sin esperar
+ * nada: si el PUT fallaba, el aviso salia en una esquina, la fila ya habia
+ * vuelto a sus valores viejos y lo que acababas de escribir se perdia. Ahora
+ * lo escrito no se toca hasta que el servidor confirma.
+ */
+async function save(id) {
+  if (!canSave.value || saving.value) return
   const { price, ...rest } = draft
-  emit('update', id, { ...rest, price: parse(price) ?? 0 })
+  const cents = parse(price)
+  saving.value = true
+  try {
+    await emitUpdate(id, {
+      ...rest,
+      /*
+       * Si la caja del precio se deja en blanco NO se manda el campo, y el
+       * servidor conserva el que ya tenia (es un update parcial). Antes iba
+       * `parse(price) ?? 0`, asi que vaciar la caja no era "dejalo como esta"
+       * sino "ponlo a 0 €", y se cargaba el importe sin avisar.
+       */
+      ...(cents === null ? {} : { price: cents }),
+    })
+  } catch {
+    return // el aviso ya lo ha dado el composable; los campos se conservan
+  } finally {
+    saving.value = false
+  }
   editingId.value = null
+}
+
+// el padre devuelve la promesa de updateOrder, asi sabemos si ha ido bien
+function emitUpdate(id, fields) {
+  return new Promise((resolve, reject) => {
+    emit('update', id, fields, { resolve, reject })
+  })
 }
 </script>
 
 <template>
   <div class="list">
-    <TransitionGroup name="row" tag="ul" class="rows">
+    <!--
+      type="transition" no es decoracion: .row declara SIEMPRE
+      `animation: row-in var(--dur-4) ... backwards` con su animation-delay (hasta
+      12 * --stagger). Al salir, Vue mide la transicion Y la animacion y se queda
+      con la mas larga, asi que elegia la ANIMACION (--dur-4 mas doce escalones
+      de --stagger: mas de un segundo) en vez de los --dur-2 de .row-leave-active. Luego esperaba un `animationend` que no
+      llega nunca —row-in acabo hace rato— y caia en su setTimeout: la fila
+      terminaba su fundido a los 200ms y se quedaba 760ms mas en el DOM,
+      invisible y en position: absolute, estorbando al -move de las vecinas.
+
+      Con esto Vue solo mira la transicion, que es la que de verdad la saca.
+    -->
+    <TransitionGroup name="row" type="transition" tag="ul" class="rows">
       <li
         v-for="(o, i) in orders"
         :key="o.id"
         class="row"
-        :class="{ editing: editingId === o.id, fresh: freshIds.has(o.id), mine: isMe(o.person) }"
+        :class="{ fresh: freshIds.has(o.id), mine: isMe(o.person), paid: !!o.paid }"
         :style="{ '--i': Math.min(i, 12) }"
       >
         <span v-if="freshIds.has(o.id)" class="new-badge" aria-hidden="true">NUEVO</span>
         <span class="idx">{{ num(i) }}</span>
 
-        <!-- vista normal -->
-        <template v-if="editingId !== o.id">
-          <div class="body">
-            <div class="line-1">
-              <span class="person">{{ o.person || 'anónimo' }}</span>
-              <span v-if="isMe(o.person)" class="mine-tag">« tú »</span>
-              <span class="arrow">::</span>
-              <span class="size-chip" :class="o.size === 'half' ? 'half' : 'whole'">
-                {{ o.size === 'half' ? '½' : '1' }}
-              </span>
-              <span class="filling">{{ o.filling }}</span>
-            </div>
-            <div class="line-2">
-              <span v-if="o.bread" class="tag">pan: {{ o.bread }}</span>
-              <span v-if="o.notes" class="tag note">! {{ o.notes }}</span>
-              <span v-if="!o.bread && !o.notes" class="tag empty">— sin extras —</span>
-            </div>
-          </div>
-
-          <div class="pay">
-            <span class="amount">{{ fmt(o.price) }}</span>
-            <button
-              class="paid-btn"
-              type="button"
-              :class="o.paid ? 'is-paid' : 'is-due'"
-              :aria-pressed="!!o.paid"
-              :title="paidTitle(o)"
-              @click="emit('paid', o.id, !o.paid)"
-            >
-              <span aria-hidden="true">{{ o.paid ? '✓' : '€' }}</span>
-              {{ o.paid ? (o.paidAuto === 1 ? 'puso' : 'pagado') : 'debe' }}
-            </button>
-          </div>
-
-          <div v-if="!readonly" class="actions">
-            <button class="act edit" type="button" :aria-label="`editar pedido de ${o.person}`" @click="startEdit(o)">
-              <span aria-hidden="true">✎</span>
-            </button>
-            <button class="act del" type="button" :aria-label="`eliminar pedido de ${o.person}`" @click="emit('remove', o.id)">
-              <span aria-hidden="true">✕</span>
-            </button>
-          </div>
-        </template>
-
         <!--
-          Modo edición. La transición envuelve SÓLO al formulario, que en
-          .row.editing es el segundo hijo del grid: meter un div de envoltorio
-          alrededor de cada rama rompería las dos rejillas (auto 1fr auto auto
-          en la vista normal, auto 1fr aquí). Con `appear` el formulario entra
-          animado en vez de aparecer de golpe.
+          El relevo vista normal <-> edicion.
+
+          Antes eran dos <template v-if>/<template v-else> pelados, y eso tiene
+          un problema que no se arregla con CSS: un <template> NO es un
+          elemento, asi que no hay nada que transicionar. La vista normal
+          desaparecia de golpe, la rejilla de la fila saltaba de cuatro columnas
+          a dos, y solo entonces entraba el formulario con su fundido. Se veia
+          el salto, no el cambio.
+
+          Ahora la fila es SIEMPRE `auto 1fr` —el numero y un hueco— y quien
+          cambia es lo que ocupa el hueco: dos cajas de verdad que se relevan
+          con `swap`, el mismo vocabulario que los otros cuatro relevos de la
+          app. La rejilla de la vista normal se ha mudado a .read, que es quien
+          la necesitaba de verdad.
+
+          Con mode="out-in" el alto de la fila cambia mientras el formulario
+          todavia esta invisible, que es donde menos se nota.
         -->
-        <template v-else>
-          <Transition name="swap" appear>
-          <form class="edit-form" @submit.prevent="save(o.id)">
-            <div class="e-grid">
-              <input ref="firstInput" v-model="draft.person" placeholder="nombre" maxlength="40" />
-              <input v-model="draft.filling" placeholder="relleno *" maxlength="60" />
-              <input v-model="draft.bread" placeholder="pan" maxlength="40" />
-              <input v-model="draft.notes" placeholder="extras / notas" maxlength="80" />
-            </div>
-            <div class="e-row">
-              <div class="e-seg" role="group" aria-label="tamaño">
-                <button type="button" class="e-seg-btn" :class="{ active: draft.size === 'half' }" @click="draft.size = 'half'">½ media</button>
-                <button type="button" class="e-seg-btn" :class="{ active: draft.size === 'whole' }" @click="draft.size = 'whole'">🥖 entero</button>
+        <Transition name="swap" mode="out-in">
+          <div v-if="editingId !== o.id" key="read" class="read">
+            <div class="body">
+              <div class="line-1">
+                <span class="person">{{ o.person || 'anónimo' }}</span>
+                <span v-if="isMe(o.person)" class="mine-tag">« tú »</span>
+                <span class="arrow">::</span>
+                <span class="size-chip" :class="o.size === 'half' ? 'half' : 'whole'">
+                  {{ o.size === 'half' ? '½' : '1' }}
+                </span>
+                <span class="filling">{{ o.filling }}</span>
               </div>
-              <span class="e-price">
-                <input v-model="draft.price" type="text" inputmode="decimal" maxlength="7" placeholder="0,00" aria-label="precio en euros" />
-                <span class="e-cur" aria-hidden="true">€</span>
-              </span>
+              <div class="line-2">
+                <span v-if="o.bread" class="tag">pan: {{ o.bread }}</span>
+                <span v-if="o.notes" class="tag note">! {{ o.notes }}</span>
+                <span v-if="!o.bread && !o.notes" class="tag empty">— sin extras —</span>
+              </div>
             </div>
+
+            <div class="pay">
+              <span class="amount"><MoneyValue :cents="o.price" /></span>
+              <button
+                class="paid-btn"
+                type="button"
+                :class="o.paid ? 'is-paid' : 'is-due'"
+                :aria-pressed="!!o.paid"
+                :title="paidTitle(o)"
+                @click="emit('paid', o.id, !o.paid)"
+              >
+                <span aria-hidden="true">{{ o.paid ? '✓' : '€' }}</span>
+                {{ o.paid ? (o.paidAuto === 1 ? 'puso' : 'pagado') : 'debe' }}
+              </button>
+            </div>
+
+            <div v-if="!readonly" class="actions">
+              <button class="act edit" type="button" :aria-label="`editar pedido de ${o.person}`" @click="startEdit(o)">
+                <span aria-hidden="true">✎</span>
+              </button>
+              <button class="act del" type="button" :aria-label="`eliminar pedido de ${o.person}`" @click="emit('remove', o.id)">
+                <span aria-hidden="true">✕</span>
+              </button>
+            </div>
+          </div>
+
+          <!--
+            Edicion. Los campos llevan etiqueta y no solo `placeholder`: aqui
+            startEdit rellena los seis, asi que el placeholder no se ve NUNCA y
+            lo que quedaba eran cuatro cajas identicas con texto dentro sin
+            forma de saber cual era el pan y cual las notas. Por lo mismo el `*`
+            de obligatorio se ha mudado del placeholder a la etiqueta.
+
+            La caja (.input), la pastilla (.seg) y la etiqueta (.lbl) salen de
+            base.css: son las MISMAS que las del formulario de alta, que es de
+            donde se habian copiado a mano y de donde ya habian divergido.
+          -->
+          <form
+            v-else
+            key="edit"
+            class="edit-form"
+            @submit.prevent="save(o.id)"
+            @keydown.esc="cancel"
+          >
+            <div class="e-grid">
+              <label class="e-field">
+                <span class="lbl">// quién pide</span>
+                <input
+                  ref="firstInput"
+                  v-model="draft.person"
+                  class="input"
+                  type="text"
+                  list="bocatones-people-edit"
+                  placeholder="nombre"
+                  autocomplete="off"
+                  maxlength="40"
+                />
+                <!-- solo existe una fila en edicion a la vez, asi que este id
+                     no puede duplicarse con el del formulario de alta -->
+                <datalist id="bocatones-people-edit">
+                  <option v-for="p in knownPeople" :key="p" :value="p" />
+                </datalist>
+              </label>
+
+              <label class="e-field">
+                <span class="lbl">// relleno *</span>
+                <input
+                  v-model="draft.filling"
+                  class="input"
+                  type="text"
+                  placeholder="lomo con queso..."
+                  autocomplete="off"
+                  maxlength="60"
+                  :aria-invalid="!canSave"
+                />
+              </label>
+
+              <label class="e-field">
+                <span class="lbl">// pan</span>
+                <input
+                  v-model="draft.bread"
+                  class="input"
+                  type="text"
+                  placeholder="barra / integral / sin gluten"
+                  autocomplete="off"
+                  maxlength="40"
+                />
+              </label>
+
+              <label class="e-field">
+                <span class="lbl">// extras / notas</span>
+                <input
+                  v-model="draft.notes"
+                  class="input"
+                  type="text"
+                  placeholder="sin tomate, con alioli..."
+                  autocomplete="off"
+                  maxlength="80"
+                />
+              </label>
+            </div>
+
+            <div class="e-row">
+              <div class="e-cell">
+                <span class="lbl">// tamaño</span>
+                <div class="seg" role="group" aria-label="tamaño del bocata">
+                  <button
+                    type="button"
+                    class="seg-btn"
+                    :class="{ active: draft.size === 'half' }"
+                    :aria-pressed="draft.size === 'half'"
+                    @click="draft.size = 'half'"
+                  >½ media</button>
+                  <button
+                    type="button"
+                    class="seg-btn"
+                    :class="{ active: draft.size === 'whole' }"
+                    :aria-pressed="draft.size === 'whole'"
+                    @click="draft.size = 'whole'"
+                  >🥖 entero</button>
+                </div>
+              </div>
+
+              <!-- la misma caja de precio que el formulario de alta, y del
+                   mismo sitio. Sin roll-in: aquí la cifra llega con el
+                   pedido que estás editando, no aparece sola. -->
+              <div class="e-cell">
+                <span class="lbl">// precio</span>
+                <MoneyInput
+                  v-model="draft.price"
+                  style="--mi-w: 6.5rem"
+                  placeholder="0,00"
+                  title="en blanco se queda el precio que ya tenía"
+                  aria-label="precio en euros"
+                />
+              </div>
+            </div>
+
+            <p v-if="!canSave" class="e-hint" role="alert">
+              // el relleno es lo único obligatorio
+            </p>
+
             <div class="e-actions">
-              <button class="e-btn save" type="submit" :disabled="!draft.filling.trim()">guardar</button>
+              <button class="e-btn save" type="submit" :disabled="!canSave || saving">
+                {{ saving ? 'guardando…' : 'guardar' }}
+              </button>
               <button class="e-btn cancel" type="button" @click="cancel">cancelar</button>
+              <span class="e-esc" aria-hidden="true">esc cancela</span>
             </div>
           </form>
-          </Transition>
-        </template>
+        </Transition>
       </li>
     </TransitionGroup>
   </div>
@@ -153,6 +338,8 @@ function save(id) {
   display: flex;
   flex-direction: column;
   gap: 0.55rem;
+  /* relative porque .row-leave-active saca al que se va con position: absolute */
+  position: relative;
 }
 
 /*
@@ -168,7 +355,10 @@ function save(id) {
   display: grid;
   animation: row-in var(--dur-4) var(--ease-out) backwards;
   animation-delay: calc(var(--i, 0) * var(--stagger));
-  grid-template-columns: auto 1fr auto auto;
+  /* el numero y un hueco, y nada mas: lo que cambia al editar es QUIEN ocupa
+     el hueco, no la rejilla. Antes la fila saltaba de cuatro columnas a dos en
+     el mismo frame en que desaparecia la vista normal. */
+  grid-template-columns: auto 1fr;
   align-items: center;
   gap: 0.9rem;
   background: var(--bg-soft);
@@ -176,7 +366,19 @@ function save(id) {
   border-left: 2px solid var(--line-2);
   border-radius: var(--radius);
   padding: 0.75rem 0.9rem;
-  transition: border-color 0.2s, transform 0.2s, background 0.2s;
+  transition:
+    border-color var(--dur-2) var(--ease-out),
+    transform var(--dur-2) var(--ease-out),
+    background var(--dur-2) var(--ease-out);
+}
+
+/* la rejilla que antes era la de .row: contenido | dinero | acciones */
+.read {
+  display: grid;
+  grid-template-columns: 1fr auto auto;
+  align-items: center;
+  gap: 0.9rem;
+  min-width: 0;
 }
 
 @keyframes row-in {
@@ -253,13 +455,27 @@ function save(id) {
   .row.fresh { animation: none; border-left-color: var(--g7); }
   .row.fresh::after { display: none; }
 }
-.row:hover:not(.editing) {
+.row:hover:not(:has(.edit-form)) {
   border-left-color: var(--ink);
   background: var(--panel);
   transform: translateX(3px);
 }
-.row.editing {
-  grid-template-columns: auto 1fr;
+/*
+ * El aspecto de "esta fila se esta editando".
+ *
+ * Va con :has(.edit-form) y no con una clase .editing atada a `editingId`,
+ * que es lo obvio y es lo que habia. El problema de la clase es CUANDO se
+ * quita: `editingId = null` la borra en el mismo tick en que empieza la SALIDA
+ * del formulario, asi que la fila recuperaba el borde, el fondo y la
+ * alineacion normales mientras el formulario todavia se estaba yendo, y el
+ * numero pegaba un salto a media altura delante de tus narices. :has aguanta
+ * mientras el formulario siga en el DOM, que es exactamente lo que dura la
+ * transicion.
+ */
+.row:has(.edit-form) {
+  /* el numero se sube a la primera linea del formulario: centrado en una caja
+     de seis controles se quedaba flotando a media altura, sin nada al lado */
+  align-items: start;
   border-left-color: var(--g7);
   background: var(--panel);
 }
@@ -310,46 +526,6 @@ function save(id) {
 .size-chip.whole { color: var(--bg); background: var(--ink); border-color: var(--ink); }
 .size-chip.half { color: var(--ink); background: transparent; border-style: dashed; border-color: var(--ink-dim); }
 
-/* fila de tamaño + precio en el modo edición */
-.e-row { display: flex; align-items: center; flex-wrap: wrap; gap: 0.6rem 0.9rem; }
-.e-price { position: relative; display: inline-flex; align-items: center; }
-.e-price input {
-  width: 6rem;
-  min-width: 0;
-  font-family: var(--mono);
-  font-size: var(--fs-3);
-  text-align: right;
-  font-variant-numeric: tabular-nums;
-  color: var(--ink);
-  background: var(--bg);
-  border: 1px solid var(--line-2);
-  border-radius: 999px;
-  padding: 0.26rem 1.5rem 0.26rem 0.7rem;
-}
-.e-price input:focus { border-color: var(--ink); }
-.e-cur { position: absolute; right: 0.65rem; font-size: var(--fs-2); color: var(--ink-faint); pointer-events: none; }
-
-.e-seg {
-  display: inline-flex;
-  border: 1px solid var(--line-2);
-  border-radius: 999px;
-  padding: 2px;
-  gap: 2px;
-  align-self: flex-start;
-}
-.e-seg-btn {
-  font-family: var(--mono);
-  font-size: var(--fs-2);
-  color: var(--ink-dim);
-  background: transparent;
-  border: none;
-  border-radius: 999px;
-  padding: 0.28rem 0.75rem;
-  cursor: pointer;
-  transition: color 0.15s, background 0.15s;
-}
-.e-seg-btn:hover { color: var(--ink); }
-.e-seg-btn.active { color: var(--bg); background: var(--ink); font-weight: 700; }
 
 .line-2 {
   display: flex;
@@ -373,7 +549,24 @@ function save(id) {
   font-size: var(--fs-3);
   color: var(--ink-dim);
   white-space: nowrap;
+  transition: opacity var(--dur-3) var(--ease-out);
 }
+
+/*
+ * Pagado = el dinero se calla.
+ *
+ * El paso `debe -> pagado` era instantaneo: el boton cambiaba de color (ya
+ * tenia su transition) y el importe se quedaba igual de encendido que el de
+ * quien todavia debe. Asi no se distinguia de un vistazo lo que falta por
+ * cobrar, que es justo para lo que se mira la lista.
+ *
+ * Se apaga el importe y NO se tacha: `line-through` cambia la caja y no se
+ * puede animar con transform, que es la regla de la casa (base.css:334).
+ *
+ * Y NO se toca el borde izquierdo a proposito: ahi ya se pelean tres senales
+ * (.fresh, la edicion y .mine). Una cuarta seria ruido, no informacion.
+ */
+.row.paid .amount { opacity: 0.45; }
 .paid-btn {
   display: inline-flex;
   align-items: center;
@@ -388,7 +581,10 @@ function save(id) {
   border-radius: 999px;
   padding: 0.22rem 0.6rem;
   cursor: pointer;
-  transition: color 0.15s, border-color 0.15s, box-shadow 0.15s;
+  transition:
+    color var(--dur-1) var(--ease-out),
+    border-color var(--dur-1) var(--ease-out),
+    box-shadow var(--dur-1) var(--ease-out);
 }
 .paid-btn.is-due { color: var(--g6); border-color: color-mix(in srgb, var(--g6) 45%, var(--line-2)); }
 .paid-btn.is-due:hover { border-color: var(--g6); box-shadow: 0 0 14px -6px var(--g6); }
@@ -396,8 +592,8 @@ function save(id) {
 .paid-btn.is-paid:hover { border-color: var(--g5); box-shadow: 0 0 14px -6px var(--g5); }
 
 @media (max-width: 560px) {
-  .row { grid-template-columns: auto 1fr auto; }
-  .pay { grid-column: 2 / -1; margin-top: 0.35rem; }
+  .read { grid-template-columns: 1fr auto; }
+  .pay { grid-column: 1 / -1; margin-top: 0.35rem; }
 }
 
 .actions { display: flex; gap: 0.35rem; }
@@ -410,34 +606,71 @@ function save(id) {
   height: 2rem;
   border-radius: var(--radius);
   cursor: pointer;
-  transition: color 0.15s, background 0.15s;
+  transition:
+    color var(--dur-1) var(--ease-out),
+    background var(--dur-1) var(--ease-out);
 }
 .act.edit:hover { color: var(--bg); background: var(--g7); }
 .act.del:hover { color: var(--bg); background: var(--ink); }
 
-/* ---- edición ---- */
-.edit-form { display: flex; flex-direction: column; gap: 0.7rem; }
+/* ---- edición ----
+   La caja (.input), la pastilla (.seg) y la etiqueta (.lbl) son las de
+   base.css, compartidas con el formulario de alta. Aquí solo queda la
+   disposición. */
+.edit-form {
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-3);
+  min-width: 0;
+  /* la fila ya trae su propio padding, pero el formulario necesita respirar
+     un poco más que la vista normal: son seis controles, no una línea de texto */
+  padding-block: 0.2rem;
+}
 .e-grid {
   display: grid;
   grid-template-columns: repeat(2, minmax(0, 1fr));
-  gap: 0.5rem;
+  gap: var(--sp-2) var(--sp-3);
 }
 @media (max-width: 560px) { .e-grid { grid-template-columns: 1fr; } }
-.e-grid input {
-  min-width: 0; /* mismo motivo que en OrderForm: mínimo intrínseco del input */
-  font-family: var(--mono);
-  font-size: var(--fs-2);
-  color: var(--ink);
-  background: var(--bg);
-  border: 1px solid var(--line-2);
-  border-radius: var(--radius);
-  padding: 0.55rem 0.7rem;
-}
-.e-grid input::placeholder { color: var(--ink-faint); }
-.e-grid input:focus { border-color: var(--ink); }
 
-.e-actions { display: flex; gap: 0.5rem; }
+/* mismo par etiqueta+campo que .field en el formulario de alta */
+.e-field {
+  display: flex;
+  flex-direction: column;
+  gap: 0.4rem;
+  min-width: 0;
+}
+
+.e-row {
+  display: flex;
+  align-items: flex-end;
+  flex-wrap: wrap;
+  gap: var(--sp-2) var(--sp-4);
+}
+/* tamaño y precio, cada uno bajo su etiqueta, igual que los campos de arriba */
+.e-cell { display: flex; flex-direction: column; gap: 0.4rem; }
+
+/* por qué está apagado «guardar», en vez de un botón muerto sin explicación */
+.e-hint {
+  font-size: var(--fs-1);
+  color: var(--g6);
+  letter-spacing: 0.04em;
+}
+
+.e-actions { display: flex; align-items: center; gap: var(--sp-2); flex-wrap: wrap; }
+/* la salida de teclado, dicha en voz baja. aria-hidden en el template: para
+   quien va con lector de pantalla la tecla no es una pista visual */
+.e-esc {
+  margin-left: auto;
+  font-size: var(--fs-1);
+  color: var(--ink-faint);
+  letter-spacing: 0.06em;
+}
 .e-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-height: var(--tap);
   font-family: var(--mono);
   font-size: var(--fs-2);
   font-weight: 700;
@@ -445,7 +678,10 @@ function save(id) {
   border-radius: var(--radius);
   padding: 0.45rem 1rem;
   cursor: pointer;
-  transition: color 0.15s, background 0.15s, border-color 0.15s;
+  transition:
+    color var(--dur-1) var(--ease-out),
+    background var(--dur-1) var(--ease-out),
+    border-color var(--dur-1) var(--ease-out);
 }
 .e-btn.save {
   color: var(--bg);
@@ -463,8 +699,14 @@ function save(id) {
 /* TransitionGroup — `all` incluía height/margin/padding, así que cada alta o
    baja provocaba un reflow de la lista entera; los -from/-to solo usan
    opacity y transform, con lo que `all` no aportaba nada */
-.row-enter-active { transition: opacity 0.32s, transform 0.32s cubic-bezier(0.2, 0.8, 0.2, 1); }
-.row-leave-active { transition: opacity 0.28s ease, transform 0.28s ease; position: relative; }
+.row-enter-active { transition: opacity var(--dur-3) var(--ease-out), transform var(--dur-3) var(--ease-out); }
+/* absolute y no relative: el que se va tiene que salir del flujo o los que
+   quedan no pueden deslizarse a su sitio con -move, que es justo el tiron seco
+   que -move existe para evitar. OJO: eso obliga a listarlo en el bloque de
+   movimiento reducido de base.css, con los demas -leave-active absolutos. */
+.row-leave-active { transition: opacity var(--dur-2) var(--ease-out), transform var(--dur-2) var(--ease-out); position: absolute; }
 .row-enter-from { opacity: 0; transform: translateX(-14px); border-left-color: var(--g5); }
 .row-leave-to { opacity: 0; transform: translateX(40px); }
+/* faltaba: reordenar la cola no estaba animado */
+.row-move { transition: transform var(--dur-3) var(--ease-out); }
 </style>

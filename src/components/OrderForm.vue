@@ -5,6 +5,7 @@ import { useMe } from '../composables/useMe.js'
 import { usePeople } from '../composables/usePeople.js'
 import { api } from '../api.js'
 import { toInput, parse } from '../money.js'
+import MoneyInput from './MoneyInput.vue'
 
 const emit = defineEmits(['add'])
 const { classics, loading: classicsLoading, addClassic, removeClassic, priceFor } = useClassics()
@@ -172,6 +173,7 @@ function askRemoveClassic(id) {
         <span class="lbl">// quién pide</span>
         <input
           v-model="person"
+          class="input"
           type="text"
           list="bocatones-people"
           placeholder="tu nombre"
@@ -185,22 +187,22 @@ function askRemoveClassic(id) {
 
       <label class="field">
         <span class="lbl">// relleno *</span>
-        <input v-model="filling" type="text" placeholder="lomo con queso..." autocomplete="off" maxlength="60" />
+        <input v-model="filling" class="input" type="text" placeholder="lomo con queso..." autocomplete="off" maxlength="60" />
       </label>
 
       <label class="field">
         <span class="lbl">// pan</span>
-        <input v-model="bread" type="text" placeholder="barra / integral / sin gluten" autocomplete="off" maxlength="40" />
+        <input v-model="bread" class="input" type="text" placeholder="barra / integral / sin gluten" autocomplete="off" maxlength="40" />
       </label>
 
       <label class="field">
         <span class="lbl">// extras / notas</span>
-        <input v-model="notes" type="text" placeholder="sin tomate, con alioli..." autocomplete="off" maxlength="80" />
+        <input v-model="notes" class="input" type="text" placeholder="sin tomate, con alioli..." autocomplete="off" maxlength="80" />
       </label>
     </div>
 
     <div class="size-row">
-      <span class="size-lbl">// tamaño</span>
+      <span class="lbl">// tamaño</span>
       <div class="seg" role="group" aria-label="tamaño del bocata">
         <button
           type="button"
@@ -218,26 +220,26 @@ function askRemoveClassic(id) {
         >🥖 entero</button>
       </div>
 
+      <!--
+        El precio RUEDA hasta el del catálogo: pulsar un clásico o un "lo de
+        siempre" es justo el gesto en el que la cifra se rellena sola, y de golpe
+        no se veía de dónde salía. Ver MoneyInput.
+      -->
       <label class="price">
-        <span class="size-lbl">// precio</span>
-        <span class="price-box">
-          <input
-            v-model="price"
-            type="text"
-            inputmode="decimal"
-            maxlength="7"
-            :placeholder="suggestedTxt || '0,00'"
-            :title="suggestedTxt ? `precio del catálogo: ${suggestedTxt} €` : 'sin precio en el catálogo'"
-            aria-label="precio en euros"
-            @input="priceTouched = true"
-          />
-          <span class="cur" aria-hidden="true">€</span>
-        </span>
+        <span class="lbl">// precio</span>
+        <MoneyInput
+          v-model="price"
+          style="--mi-w: 6.5rem"
+          :placeholder="suggestedTxt || '0,00'"
+          :title="suggestedTxt ? `precio del catálogo: ${suggestedTxt} €` : 'sin precio en el catálogo'"
+          aria-label="precio en euros"
+          @input="priceTouched = true"
+        />
       </label>
     </div>
 
     <div v-if="usual.length" class="usual">
-      <span class="quick-lbl">🔁 lo de siempre:</span>
+      <span class="lbl">🔁 lo de siempre:</span>
       <TransitionGroup name="chip">
       <button
         v-for="u in usual"
@@ -254,7 +256,7 @@ function askRemoveClassic(id) {
     </div>
 
     <div v-if="classicsLoading || classics.length || canSaveClassic" class="quick">
-      <span class="quick-lbl">clásicos:</span>
+      <span class="lbl">clásicos:</span>
 
       <span v-if="classicsLoading" class="quick-loading">cargando…</span>
 
@@ -331,33 +333,9 @@ function askRemoveClassic(id) {
   flex-direction: column;
   gap: 0.4rem;
 }
-.lbl {
-  font-size: var(--fs-2);
-  letter-spacing: 0.06em;
-  color: var(--ink-faint);
-  text-transform: uppercase;
-}
 
-input {
-  /* imprescindible: un <input> sin `size` tiene un mínimo intrínseco de ~20
-     caracteres (~210px), así que dos columnas 1fr no bajaban de ~439px y el
-     formulario desbordaba justo por encima del breakpoint de .layout (861px),
-     donde ninguna media query llegaba. */
-  min-width: 0;
-  font-family: var(--mono);
-  font-size: var(--fs-3);
-  color: var(--ink);
-  background: var(--bg);
-  border: 1px solid var(--line-2);
-  border-radius: var(--radius);
-  padding: 0.55rem 0.7rem;
-  transition: border-color 0.2s, box-shadow 0.2s;
-}
-input::placeholder { color: var(--ink-faint); }
-input:focus {
-  border-color: var(--ink);
-  box-shadow: inset 0 0 0 1px var(--ink);
-}
+/* la caja de texto (.input) y la pastilla de tamaño (.seg) viven en base.css:
+   las comparte con el formulario de edición de OrderList */
 
 .size-row {
   display: flex;
@@ -367,29 +345,9 @@ input:focus {
   margin-top: var(--sp-3);
 }
 
-/* precio: input estrecho con el símbolo del euro dentro de la caja */
+/* precio: la caja se la pone MoneyInput (borde, € dentro y cifra que rueda);
+   aquí solo queda cómo se sienta al lado de su etiqueta */
 .price { display: inline-flex; align-items: center; gap: 0.7rem; }
-.price-box {
-  position: relative;
-  display: inline-flex;
-  align-items: center;
-}
-.price-box input {
-  width: 6.5rem;
-  padding: 0.32rem 1.6rem 0.32rem 0.7rem;
-  font-size: var(--fs-3);
-  text-align: right;
-  font-variant-numeric: tabular-nums;
-  border-radius: 999px;
-}
-.cur {
-  position: absolute;
-  right: 0.7rem;
-  font-size: var(--fs-2);
-  color: var(--ink-faint);
-  pointer-events: none;
-}
-.price-box input:focus + .cur { color: var(--ink); }
 
 /* precio de catálogo dentro del chip del clásico */
 .chip-price {
@@ -399,37 +357,6 @@ input:focus {
   font-variant-numeric: tabular-nums;
 }
 .chip-pick:hover .chip-price { color: var(--ink-dim); }
-.size-lbl {
-  font-size: var(--fs-2);
-  color: var(--ink-faint);
-  text-transform: uppercase;
-  letter-spacing: 0.06em;
-}
-.seg {
-  display: inline-flex;
-  border: 1px solid var(--line-2);
-  border-radius: 999px;
-  padding: 2px;
-  gap: 2px;
-}
-.seg-btn {
-  font-family: var(--mono);
-  font-size: var(--fs-2);
-  color: var(--ink-dim);
-  background: transparent;
-  border: none;
-  border-radius: 999px;
-  padding: 0.32rem 0.85rem;
-  cursor: pointer;
-  transition: color 0.15s, background 0.15s;
-}
-.seg-btn:hover { color: var(--ink); }
-.seg-btn.active {
-  color: var(--bg);
-  background: var(--ink);
-  font-weight: 700;
-}
-
 .quick,
 .usual {
   display: flex;
@@ -441,20 +368,13 @@ input:focus {
      resto se deslice a su hueco en vez de dar un salto (ver .chip-leave-active) */
   position: relative;
 }
-.quick-lbl {
-  font-size: var(--fs-2);
-  color: var(--ink-faint);
-  text-transform: uppercase;
-  letter-spacing: 0.06em;
-}
-
 .chip {
   display: inline-flex;
   align-items: stretch;
   border: 1px solid var(--line-2);
-  border-radius: 999px;
+  border-radius: var(--radius-pill);
   overflow: hidden;
-  transition: border-color 0.15s;
+  transition: border-color var(--dur-1) var(--ease-out);
 }
 .chip:hover { border-color: var(--ink-dim); }
 .chip-pick {
@@ -468,7 +388,7 @@ input:focus {
   border: none;
   padding: 0.28rem 0.2rem 0.28rem 0.7rem;
   cursor: pointer;
-  transition: color 0.15s;
+  transition: color var(--dur-1) var(--ease-out);
 }
 .chip-pick:hover { color: var(--ink); }
 .chip-del {
@@ -481,7 +401,7 @@ input:focus {
   border: none;
   padding: 0 0.55rem 0 0.35rem;
   cursor: pointer;
-  transition: color 0.15s;
+  transition: color var(--dur-1) var(--ease-out);
 }
 .chip-del:hover { color: var(--g1); }
 
@@ -496,7 +416,10 @@ input:focus {
   padding: 0.28rem 0.7rem;
   min-height: var(--tap);
   cursor: pointer;
-  transition: color 0.15s, background 0.15s, border-color 0.15s;
+  transition:
+    color var(--dur-1) var(--ease-out),
+    background var(--dur-1) var(--ease-out),
+    border-color var(--dur-1) var(--ease-out);
 }
 .usual-chip:hover {
   color: var(--bg);
@@ -547,13 +470,17 @@ input:focus {
   border-radius: var(--radius);
   padding: 0.7rem;
   cursor: pointer;
-  transition: transform 0.1s, background 0.2s, color 0.2s, box-shadow 0.2s;
+  transition:
+    transform var(--dur-1) var(--ease-out),
+    background var(--dur-2) var(--ease-out),
+    color var(--dur-2) var(--ease-out),
+    box-shadow var(--dur-2) var(--ease-out);
 }
 .submit .caret { display: inline-block; transform: translateY(1px); }
 .submit:hover:not(:disabled) {
   box-shadow: 0 0 26px -4px var(--glow-hard);
 }
-.submit:active:not(:disabled) { transform: translateY(1px) scale(0.997); }
+.submit:active:not(:disabled) { transform: translateY(1px) scale(0.99); }
 .submit:disabled {
   color: var(--ink-faint);
   background: transparent;

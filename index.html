@@ -8,8 +8,12 @@
     <meta name="description" content="La lista de bocatas del bar, en directo: pedidos compartidos, precios, quién ha pagado y el sorteo de quién baja a recogerlos." />
     <meta name="robots" content="noindex" />
 
-    <!-- iconos: antes el favicon era bocata.jpg, 1,7 MB de JPEG en cada carga en frío -->
-    <link rel="icon" href="/favicon.ico" sizes="any" />
+    <!-- iconos: antes el favicon era bocata.jpg, 1,7 MB de JPEG en cada carga en frío.
+         El ?v= no es decorativo: Chrome guarda los favicons en una base de datos propia
+         por host que NO se limpia ni con Ctrl+Shift+R, así que al cambiar de fichero se
+         quedaba pintado el icono viejo. Subir el número aquí (y el CACHE de sw.js) es lo
+         único que fuerza a todo el mundo a recoger el nuevo. -->
+    <link rel="icon" href="/favicon.ico?v=2" sizes="any" />
     <link rel="apple-touch-icon" href="/apple-touch-icon.png" />
 
     <!--

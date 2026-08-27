@@ -2,6 +2,7 @@
 import { computed, onMounted, ref } from 'vue'
 import OrderList from './OrderList.vue'
 import MoneyValue from './MoneyValue.vue'
+import PctValue from './PctValue.vue'
 import { useHistory } from '../composables/useHistory.js'
 import { todayKey } from '../api.js'
 import { personEmoji } from '../composables/usePersonEmoji.js'
@@ -94,10 +95,6 @@ function openDay(day) {
   return select(day)
 }
 
-// probabilidad con coma decimal, como el resto de los números de la app
-const PCT = new Intl.NumberFormat('es-ES', { style: 'percent', minimumFractionDigits: 1 })
-const pct = (chance) => PCT.format(chance)
-
 const maxSpent = computed(() => Math.max(1, ...people.value.map((p) => p.spent)))
 
 async function askSettle(person, pending) {
@@ -114,13 +111,17 @@ async function askSettle(person, pending) {
       <div class="b-head">
         <h2><span class="hash" aria-hidden="true">#</span> todos los días</h2>
         <span v-if="days.length" class="b-meta">
-          {{ totals.orders }} bocatas · {{ fmt(totals.total) }}
-          <template v-if="totals.pending"> · <b class="due">{{ fmt(totals.pending) }} sin pagar</b></template>
+          {{ totals.orders }} bocatas · <MoneyValue :cents="totals.total" />
+          <template v-if="totals.pending"> · <b class="due"><MoneyValue :cents="totals.pending" /> sin pagar</b></template>
         </span>
       </div>
 
-      <p v-if="loading && !days.length" class="h-empty">cargando histórico… <span class="blink">_</span></p>
-      <p v-else-if="!days.length" class="h-empty">todavía no hay días guardados.</p>
+      <!-- la lista de abajo es hermana, no alternativa (siempre se pinta), así
+           que aquí lo único que saltaba era el relevo cargando <-> vacío -->
+      <Transition name="swap" mode="out-in">
+        <p v-if="loading && !days.length" key="loading" class="h-empty">cargando histórico… <span class="blink">_</span></p>
+        <p v-else-if="!days.length" key="empty" class="h-empty">todavía no hay días guardados.</p>
+      </Transition>
 
       <div class="d-cols" aria-hidden="true">
         <span />
@@ -131,7 +132,8 @@ async function askSettle(person, pending) {
         <span>debe</span>
       </div>
 
-      <ul class="d-rows">
+      <!-- dias nuevos entran por arriba; -move recoloca a los de abajo -->
+      <TransitionGroup name="list" tag="ul" class="d-rows">
         <li v-for="(d, i) in days" :key="d.day" :style="{ '--i': Math.min(i, 12) }">
           <button
             class="d-row"
@@ -237,9 +239,9 @@ async function askSettle(person, pending) {
                 <button class="dd-x" type="button" title="Dejarlo como estaba" @click="cancelPayerEdit()">✕</button>
               </span>
               <span class="dd-money">
-                {{ fmt(dayDetail.totals.total) }}
+                <MoneyValue :cents="dayDetail.totals.total" />
                 <template v-if="dayDetail.totals.pending">
-                  · <b class="due">{{ fmt(dayDetail.totals.pending) }} pendiente</b>
+                  · <b class="due"><MoneyValue :cents="dayDetail.totals.pending" /> pendiente</b>
                 </template>
               </span>
             </div>
@@ -254,7 +256,7 @@ async function askSettle(person, pending) {
           </div>
           </Transition>
         </li>
-      </ul>
+      </TransitionGroup>
     </section>
 
     <!-- ================= por persona ================= -->
@@ -264,10 +266,14 @@ async function askSettle(person, pending) {
         <span class="b-meta">bocatas · veces que ha ido · gasto · deuda</span>
       </div>
 
-      <p v-if="!ready" class="h-empty">cargando… <span class="blink" aria-hidden="true">_</span></p>
-      <p v-else-if="!people.length" class="h-empty">nadie ha pedido todavía.</p>
+      <Transition name="swap" mode="out-in">
+      <p v-if="!ready" key="loading" class="h-empty">cargando… <span class="blink" aria-hidden="true">_</span></p>
+      <p v-else-if="!people.length" key="empty" class="h-empty">nadie ha pedido todavía.</p>
 
-      <ul v-else class="p-rows">
+      <!-- esta lista se reordena segun el gasto: -move la desliza en vez de saltar.
+           Un <TransitionGroup> dentro de un <Transition> es correcto: el de fuera
+           releva el bloque entero, el de dentro mueve sus filas. -->
+      <TransitionGroup v-else key="list" name="list" tag="ul" class="p-rows">
         <li
           v-for="(p, i) in people"
           :key="p.name"
@@ -301,7 +307,8 @@ async function askSettle(person, pending) {
             <span v-else class="p-ok">✓ al día</span>
           </span>
         </li>
-      </ul>
+      </TransitionGroup>
+      </Transition>
     </section>
 
     <!-- ================= a quién le toca ================= -->
@@ -311,12 +318,16 @@ async function askSettle(person, pending) {
         <span class="b-meta">papeletas del sorteo de hoy</span>
       </div>
 
-      <p v-if="!ready" class="h-empty">cargando… <span class="blink" aria-hidden="true">_</span></p>
-      <p v-else-if="!odds || !odds.candidates.length" class="h-empty">
+      <Transition name="swap" mode="out-in">
+      <p v-if="!ready" key="loading" class="h-empty">cargando… <span class="blink" aria-hidden="true">_</span></p>
+      <p v-else-if="!odds || !odds.candidates.length" key="empty" class="h-empty">
         no hay pedidos de hoy: no hay nada que sortear todavía.
       </p>
 
-      <template v-else>
+      <!-- el <div> no es de adorno: esta rama tenía TRES raíces y un
+           <Transition> solo acepta un hijo. `.block` es un bloque pelado y los
+           tres hijos solo usan margin-bottom, así que envolverlos no mueve nada. -->
+      <div v-else key="odds">
         <p class="o-note">
           Quien menos ha ido tiene más papeletas. Sigue siendo un sorteo: nadie llega nunca al 0%.
           Quien no pueda ir se marca desde la tragaperras y queda fuera del reparto.
@@ -326,7 +337,8 @@ async function askSettle(person, pending) {
           Hoy ya ha recogido <b>{{ odds.winner }}</b> — estos son los porcentajes si volvéis a sortear
           (no se penaliza el sorteo que se reemplaza).
         </p>
-        <ul class="o-rows">
+        <!-- se reordena en cada toggle: disponibles primero, luego por probabilidad -->
+        <TransitionGroup name="list" tag="ul" class="o-rows">
           <li
             v-for="(c, i) in odds.candidates"
             :key="c.name"
@@ -349,11 +361,12 @@ async function askSettle(person, pending) {
               <span class="o-bar" aria-hidden="true">
                 <span class="o-fill" :style="{ '--fill': c.chance }" />
               </span>
-              <span class="o-pct">{{ pct(c.chance) }}</span>
+              <span class="o-pct"><PctValue :chance="c.chance" /></span>
             </template>
           </li>
-        </ul>
-      </template>
+        </TransitionGroup>
+      </div>
+      </Transition>
     </section>
   </div>
 </template>
@@ -428,7 +441,8 @@ async function askSettle(person, pending) {
 .d-lbl { display: none; }
 
 /* ---- días ---- */
-.d-rows, .p-rows, .o-rows { list-style: none; display: flex; flex-direction: column; gap: var(--sp-2); }
+/* relative porque .list-leave-active saca al que se va con position: absolute */
+.d-rows, .p-rows, .o-rows { list-style: none; display: flex; flex-direction: column; gap: var(--sp-2); position: relative; }
 
 /* entrada escalonada, igual que en la cola de pedidos */
 .d-rows > li,
@@ -444,8 +458,9 @@ async function askSettle(person, pending) {
 .d-row {
   width: 100%;
   display: grid;
-  /* los importes van en minmax(): "1.234,50 €" son 10 caracteres y no cabían
-     en un track fijo de 4.6rem, así que se salían y se solapaban */
+  /* los importes van en minmax(): en es-ES el punto de los miles no aparece
+     hasta 10.000 €, y "12.345,60 €" son 11 caracteres que no cabían en un
+     track fijo de 4.6rem — se salían y se solapaban */
   grid-template-columns: 1rem minmax(5.6rem, auto) minmax(0, 1fr) auto minmax(4.6rem, auto) minmax(4.6rem, auto);
   align-items: center;
   gap: 0.7rem;
@@ -459,7 +474,10 @@ async function askSettle(person, pending) {
   border-radius: var(--radius);
   padding: 0.6rem 0.8rem;
   cursor: pointer;
-  transition: border-color 0.18s, background 0.18s, transform 0.18s;
+  transition:
+    border-color var(--dur-2) var(--ease-out),
+    background var(--dur-2) var(--ease-out),
+    transform var(--dur-2) var(--ease-out);
 }
 .d-row:hover { border-left-color: var(--ink); background: var(--panel); transform: translateX(3px); }
 .d-row.open { border-left-color: var(--g7); background: var(--panel); color: var(--ink); }
@@ -541,7 +559,10 @@ async function askSettle(person, pending) {
   border-radius: 999px;
   padding: 0.2rem 0.6rem;
   cursor: pointer;
-  transition: color 0.15s, background 0.15s, border-color 0.15s;
+  transition:
+    color var(--dur-1) var(--ease-out),
+    background var(--dur-1) var(--ease-out),
+    border-color var(--dur-1) var(--ease-out);
 }
 .dd-fix:hover { color: var(--bg); background: var(--g7); border-color: var(--g7); }
 /* el pagador del día y los acreedores: matices, nunca protagonistas */
@@ -610,7 +631,7 @@ async function askSettle(person, pending) {
   border-radius: var(--radius-pill);
   transform: scaleX(0);
   transform-origin: left;
-  transition: transform 0.45s cubic-bezier(0.2, 0.8, 0.2, 1);
+  transition: transform var(--dur-4) var(--ease-out);
 }
 .p-fill { background: var(--ink-dim); }
 .o-fill { background: var(--ink); }

@@ -12,6 +12,8 @@
     "preview": "vite preview"
   },
   "dependencies": {
+    "@number-flow/vue": "^0.5.2",
+    "animejs": "^4.5.0",
     "express": "^4.21.2",
     "vue": "^3.5.32",
     "ws": "^8.21.0"

@@ -1,4 +1,5 @@
 import { ref, watch } from 'vue'
+import { DUR } from '../motion.js'
 
 /*
  * useTheme — color de fondo personalizable por persona.
@@ -153,11 +154,37 @@ function applyTheme(bg) {
 
 const bg = ref(clampHex(localStorage.getItem(STORAGE_KEY) || DEFAULT_BG))
 
-// aplica de inmediato al cargar el módulo (antes del primer render de Vue)
+// aplica de inmediato al cargar el módulo (antes del primer render de Vue).
+// SIN la clase `theming`: el primer pintado no se funde desde ningún sitio.
 applyTheme(bg.value)
+
+/*
+ * El fundido del cambio de tema.
+ *
+ * applyTheme reescribe una veintena de custom properties de golpe, y las custom
+ * properties NO transicionan: cambiar de tema era un corte seco en toda la
+ * pantalla. Quien transiciona es el consumidor, así que hace falta que las
+ * superficies tengan una transición de color... pero solo durante el cambio.
+ *
+ * De ahí la clase temporal en <html> en vez de transiciones permanentes: una
+ * transición de color en todo encarecería cada hover de la app y contradiría la
+ * regla de la casa («solo opacity y transform»). Acotada a este único evento, es
+ * una excepción consciente y de 280ms. La regla vive en base.css.
+ *
+ * El temporizador se guarda y se limpia porque dos clics seguidos en dos
+ * presets dejarían la clase pegada, y con ella las transiciones de color puestas
+ * para siempre.
+ */
+let fadeTimer = null
 
 watch(bg, (v) => {
   const c = clampHex(v)
+
+  const root = document.documentElement
+  root.classList.add('theming')
+  clearTimeout(fadeTimer)
+  fadeTimer = setTimeout(() => root.classList.remove('theming'), DUR.d3)
+
   applyTheme(c)
   try {
     localStorage.setItem(STORAGE_KEY, c)
