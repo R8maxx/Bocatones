@@ -12,9 +12,9 @@ import { vSwipe } from '../composables/useSwipeToDismiss.js'
  * haber un modal abierto.
  */
 
-const { notices, dismiss, undo } = useNotices()
+const { notices, dismiss, undo, act } = useNotices()
 
-const ICON = { error: '⚠', ok: '✓', undo: '🗑️' }
+const ICON = { error: '⚠', ok: '✓', undo: '🗑️', update: '⬆' }
 
 /* ----------------------------------------------------------------
    Deslizar para descartar.
@@ -23,9 +23,12 @@ const ICON = { error: '⚠', ok: '✓', undo: '🗑️' }
    limitacion estetica: dismiss() limpia el temporizador SIN disparar ni
    onUndo ni onExpire (useNotices.js), asi que descartar un aviso de
    deshacer dejaria el pedido oculto en local y vivo en el servidor —
-   reaparece al recargar. Hoy no se puede llegar ahi porque la plantilla
-   solo pinta la ✕ en los que no son `undo`; esto mantiene esa promesa.
-   Un `undo` se resuelve con su boton, que dice lo que hace.
+   reaparece al recargar. Un `undo` se resuelve con su boton, que dice lo
+   que hace.
+
+   El aviso de version nueva tampoco pinta la ✕ (su hueco lo ocupa el boton
+   de recargar), pero ese SI se desliza: descartarlo no deja nada a medias,
+   solo dice "ahora no".
 
    La direccion ya la dice el componente: la entrada y la salida viajan a
    la izquierda, asi que deslizar a la izquierda es "fuera". Se acepta en
@@ -62,9 +65,19 @@ const canSwipe = (n) => n.kind !== 'undo'
           <button v-if="n.kind === 'undo'" class="n-undo" type="button" @click="undo(n.id)">
             ↩ deshacer
           </button>
+          <button v-else-if="n.action" class="n-undo" type="button" @click="act(n.id)">
+            {{ n.action }}
+          </button>
           <button v-else class="n-x" type="button" aria-label="descartar aviso" @click="dismiss(n.id)">✕</button>
 
-          <span class="n-bar" :style="{ animationDuration: n.ttl + 'ms' }" aria-hidden="true" />
+          <!-- la barra dibuja el tiempo que le queda; un aviso persistente no
+               tiene, y sin duración la animación se quedaría llena y quieta -->
+          <span
+            v-if="!n.persistent"
+            class="n-bar"
+            :style="{ animationDuration: n.ttl + 'ms' }"
+            aria-hidden="true"
+          />
         </div>
       </TransitionGroup>
     </div>
@@ -114,10 +127,12 @@ const canSwipe = (n) => n.kind !== 'undo'
 .notice.error { border-left-color: var(--g6); }
 .notice.ok { border-left-color: var(--g5); }
 .notice.undo { border-left-color: var(--g3); }
+.notice.update { border-left-color: var(--g7); }
 
 .n-icon { font-size: var(--fs-3); line-height: 1; }
 .notice.error .n-icon { color: var(--g6); }
 .notice.ok .n-icon { color: var(--g5); }
+.notice.update .n-icon { color: var(--g7); }
 
 .n-body { min-width: 0; display: flex; flex-direction: column; gap: 0.1rem; }
 .n-text { font-weight: 700; }

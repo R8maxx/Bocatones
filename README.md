@@ -156,11 +156,17 @@ pm2 restart bocatones # reiniciar
 
 ```sh
 cd /opt/Bocatones
-sudo git pull
-npm install
-npm run build
-pm2 restart bocatones
+sudo bash deploy/update.sh
 ```
+
+Baja, instala con `npm ci`, compila, reinicia y **comprueba** con
+`/api/version` que pm2 ha levantado la versión nueva (que el proceso viva no
+demuestra nada).
+
+Y quien tenga la app abierta se entera solo: el build sella `dist/version.json`
+con el commit, el servidor lo anuncia al reconectar el WebSocket y sale un aviso
+con botón de recargar. La caché vieja del service worker se barre en el mismo
+despliegue, porque su nombre lleva ese mismo sello (`public/sw.js`).
 
 > El WebSocket necesita las cabeceras `Upgrade`/`Connection` en nginx; el script
 > ya las pone en el bloque `location /ws` (colocado **antes** de `location /`).

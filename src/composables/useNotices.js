@@ -24,8 +24,17 @@ function dismiss(id) {
   notices.value = notices.value.filter((x) => x.id !== id)
 }
 
+/*
+ * Un aviso `persistent` no lleva temporizador: se queda hasta que se pulsa su
+ * botón o se descarta. Es para lo que no caduca — hoy solo "hay versión nueva",
+ * que sigue siendo verdad a los cuatro segundos y a la media hora.
+ */
 function push(notice) {
   const id = ++seq
+  if (notice.persistent) {
+    notices.value = [...notices.value, { ...notice, id, timer: null, ttl: null }]
+    return id
+  }
   const ttl = notice.ttl ?? TTL[notice.kind] ?? 4000
   const timer = setTimeout(() => {
     notices.value = notices.value.filter((x) => x.id !== id)
@@ -58,6 +67,28 @@ export const notifyOk = (text) => push({ kind: 'ok', text })
 export const notifyUndo = (text, { onUndo, onExpire, ttl }) =>
   push({ kind: 'undo', text, onUndo, onExpire, ttl })
 
+/*
+ * Aviso de despliegue: hay una versión nueva y la que se está mirando es vieja
+ * (ver src/composables/useVersion.js). No caduca y no recarga solo — recargar
+ * por sorpresa a quien está escribiendo un pedido le borra lo escrito, así que
+ * la última palabra es suya.
+ */
+export const notifyUpdate = () =>
+  push({
+    kind: 'update',
+    persistent: true,
+    text: 'Hay una versión nueva de Bocatones',
+    detail: 'la que ves es de antes del último cambio',
+    action: '↻ recargar',
+    onAction: () => location.reload(),
+  })
+
+export function act(id) {
+  const n = notices.value.find((x) => x.id === id)
+  if (!n) return
+  n.onAction?.()
+}
+
 export function undo(id) {
   const n = notices.value.find((x) => x.id === id)
   if (!n) return
@@ -67,5 +98,5 @@ export function undo(id) {
 }
 
 export function useNotices() {
-  return { notices, dismiss, undo }
+  return { notices, dismiss, undo, act }
 }

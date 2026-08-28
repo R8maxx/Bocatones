@@ -1,14 +1,36 @@
 import { DatabaseSync } from 'node:sqlite'
 import { randomUUID, randomInt } from 'node:crypto'
 import { fileURLToPath } from 'node:url'
-import { dirname, join } from 'node:path'
-import { existsSync } from 'node:fs'
+import { dirname, join, sep } from 'node:path'
+import { existsSync, readFileSync } from 'node:fs'
 import express from 'express'
 import { WebSocketServer } from 'ws'
 
 const __dirname = dirname(fileURLToPath(import.meta.url))
 const DB_PATH = join(__dirname, 'bocatones.db')
 const PORT = process.env.PORT || 3017
+const DIST = join(__dirname, '..', 'dist')
+
+/*
+ * Qué versión del frontend estamos sirviendo.
+ *
+ * La escribe el build (vite.config.js) en dist/version.json, y de aquí sale a
+ * dos sitios: /api/version, que es lo que consulta deploy/update.sh para
+ * confirmar que pm2 ha levantado la nueva, y el primer mensaje del WebSocket,
+ * que es como se entera de que hay algo nuevo el que tiene la pestaña abierta
+ * desde ayer.
+ *
+ * Sin build (npm run server a pelo, en desarrollo) es 'dev': ningún cliente
+ * compara contra eso porque el aviso solo vive en el bundle de producción.
+ */
+const BUILD = (() => {
+  try {
+    const { version, builtAt } = JSON.parse(readFileSync(join(DIST, 'version.json'), 'utf8'))
+    return { version, builtAt }
+  } catch {
+    return { version: 'dev', builtAt: null }
+  }
+})()
 
 // cuánto se favorece a quien menos ha ido a por los bocatas:
 // 0 = 100% aleatorio · 1 = suave · 2 = quien acaba de ir casi no entra
@@ -544,6 +566,13 @@ const pushAway = (day) =>
 const app = express()
 app.use(express.json())
 
+// --- versión del frontend servido ---
+// la consulta deploy/update.sh para confirmar que el despliegue ha entrado, y
+// le sirve de red al cliente si el WebSocket estuviera caído
+app.get('/api/version', (_req, res) => {
+  res.json(BUILD)
+})
+
 // --- clásicos (catálogo de rellenos + precios) ---
 app.get('/api/classics', (_req, res) => {
   res.json(q.classics.all())
@@ -907,11 +936,40 @@ app.get('/api/history/people', (req, res) => {
   res.json(rows)
 })
 
-// --- servir el frontend compilado (producción) ---
-const dist = join(__dirname, '..', 'dist')
-if (existsSync(dist)) {
-  app.use(express.static(dist))
-  app.get(/^(?!\/api).*/, (_req, res) => res.sendFile(join(dist, 'index.html')))
+/*
+ * --- servir el frontend compilado (producción) ---
+ *
+ * Las cabeceras de caché son la mitad del problema de "no veo lo nuevo", así
+ * que van explícitas y en dos grupos:
+ *
+ *   /assets/*  → llevan hash en el nombre. Mismo nombre ⇒ mismo contenido, o
+ *                sea que se pueden guardar un año y servirse de disco sin
+ *                preguntar. Un despliegue trae nombres nuevos, no versiones
+ *                nuevas del mismo nombre.
+ *
+ *   el resto   → index.html, sw.js, manifest, iconos, version.json: NO llevan
+ *                hash. `no-cache` no significa "no guardes", significa
+ *                "guarda pero pregunta siempre": con el ETag son 304 baratos,
+ *                y nunca se sirve un index.html rancio apuntando a hashes que
+ *                ya no existen en dist.
+ *
+ * express.static por defecto pone `public, max-age=0`, que revalida los assets
+ * con hash (gasto tonto) y aun así deja a merced del proxy de turno lo que de
+ * verdad importa que esté fresco.
+ */
+const immutable = (res) => res.setHeader('Cache-Control', 'public, max-age=31536000, immutable')
+const revalidate = (res) => res.setHeader('Cache-Control', 'no-cache')
+
+if (existsSync(DIST)) {
+  app.use(
+    express.static(DIST, {
+      setHeaders: (res, path) => (path.includes(`${sep}assets${sep}`) ? immutable : revalidate)(res),
+    }),
+  )
+  app.get(/^(?!\/api).*/, (_req, res) => {
+    revalidate(res)
+    res.sendFile(join(DIST, 'index.html'))
+  })
 }
 
 const resynced = resyncAutoPaid()
@@ -924,6 +982,10 @@ const server = app.listen(PORT, () => {
 // WebSocket en /ws — al conectar enviamos el catálogo de clásicos de entrada
 wss = new WebSocketServer({ server, path: '/ws' })
 wss.on('connection', (socket) => {
+  // lo primero, la versión: quien lleve la pestaña abierta desde antes del
+  // despliegue reconecta aquí (backoff en src/realtime.js) y es en este mensaje
+  // donde se entera de que su bundle es viejo
+  socket.send(JSON.stringify({ type: 'version', version: BUILD.version }))
   socket.send(JSON.stringify({ type: 'classics', classics: q.classics.all() }))
   // reenvía los últimos sorteos con announce:true => el cliente muestra el ganador
   // en el menú sin volver a abrir/animar la tragaperras (filtra por su propio "hoy")

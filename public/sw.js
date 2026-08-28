@@ -17,10 +17,15 @@
  * nuevos, que se piden a la red. No se queda una app vieja pegada para siempre.
  */
 
-// sube este número CADA VEZ que cambie un icono o el shell: los .ico/.png van
-// cache-first y sin hash, así que sin renombrar la caché el visitante que ya
-// tenía el service worker se queda con la copia vieja para siempre
-const CACHE = 'bocatones-v2'
+// El nombre de la caché lleva el sello del build: vite.config.js sustituye
+// __BUILD__ por el commit al compilar. No se toca a mano.
+//
+// Antes era un número que había que subir CADA VEZ que cambiaba un icono o el
+// shell — los .ico/.png van cache-first y sin hash, así que sin renombrar la
+// caché el visitante que ya tenía el service worker se quedaba con la copia
+// vieja para siempre. Y no se subía nunca. Atado al commit, cada despliegue
+// estrena caché y el `activate` de abajo barre la anterior solo.
+const CACHE = 'bocatones-__BUILD__'
 
 // lo mínimo para que la app ABRA sin red: el documento, sus iconos y las fuentes
 const SHELL = [

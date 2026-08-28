@@ -19,6 +19,7 @@ import { confirmSettle, confirmCollect } from './composables/useSettle.js'
 import { usePayer } from './composables/usePayer.js'
 import { useMe } from './composables/useMe.js'
 import { usePeople } from './composables/usePeople.js'
+import { useVersion } from './composables/useVersion.js'
 import { useInlineEdit } from './composables/useInlineEdit.js'
 import { rtStatus, isOnline } from './realtime.js'
 import { confirm, useConfirm } from './composables/useConfirm.js'
@@ -27,6 +28,10 @@ import { CURVE } from './animate.js'
 import { DUR, prefersReduced, reducedMotion } from './motion.js'
 
 const { isMe } = useMe()
+
+// avisa si el servidor ya sirve un build más nuevo que este (útil sobre todo
+// para la pestaña que lleva abierta desde antes del despliegue)
+useVersion()
 
 // el diálogo propio que ha sustituido a los window.confirm
 const { pending: confirmPending } = useConfirm()
